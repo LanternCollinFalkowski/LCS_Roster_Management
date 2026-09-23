@@ -11,6 +11,9 @@ import { RosterPage } from "./screens/Roster";
 import { ReviewPage } from "./screens/Review";
 import { TenantDetailPage } from "./screens/TenantDetail";
 import { ActivityPage } from "./screens/Activity";
+import { AttendancePage } from "./screens/Attendance";
+import { TakeAttendancePage } from "./screens/TakeAttendance";
+import { AttendanceDetailPage } from "./screens/AttendanceDetail";
 import { ProfilePage } from "./screens/Profile";
 import { MorePage } from "./screens/More";
 import { AdminSites } from "./screens/admin/Sites";
@@ -71,6 +74,9 @@ export function App() {
           <Route path="/review" element={<ReviewPage />} />
           <Route path="/tenants/:id" element={<TenantDetailPage />} />
           <Route path="/activity" element={<ActivityPage />} />
+          <Route path="/attendance" element={<AttendancePage />} />
+          <Route path="/attendance/new" element={<TakeAttendancePage />} />
+          <Route path="/attendance/:id" element={<AttendanceDetailPage />} />
         </Route>
 
         <Route element={<RequirePermission anyOf={["sites.manage", "users.manage", "integrations.manage", "settings.manage"]} />}>

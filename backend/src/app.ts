@@ -6,9 +6,10 @@ import rateLimit from "express-rate-limit";
 import { env } from "./env.js";
 import { prisma } from "./prisma.js";
 import { compressJson, errorHandler, requestId } from "./http.js";
-import { loadUser } from "./auth/middleware.js";
+import { loadUser, requireAuth } from "./auth/middleware.js";
 import { authRouter } from "./routes/auth.js";
 import { tenantsRouter } from "./routes/tenants.js";
+import { attendanceRouter } from "./routes/attendance.js";
 import { sitesRouter } from "./routes/sites.js";
 import { activityRouter } from "./routes/activity.js";
 import { usersRouter } from "./routes/users.js";
@@ -29,9 +30,12 @@ export function createApp() {
   app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
   app.use(cors({ origin: env.corsOrigins, credentials: true }));
   app.use(compressJson);
-  app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
   app.use(loadUser);
+  // A session may contain many PNG signatures. Accept the larger body only
+  // for an authenticated attendance write; all other JSON keeps the 1 MB cap.
+  app.post("/api/attendance", requireAuth, express.json({ limit: "20mb" }));
+  app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", async (_req, res) => {
     try {
@@ -45,6 +49,7 @@ export function createApp() {
   app.use("/api/auth/microsoft", authLimiter);
   app.use("/api/auth", authRouter);
   app.use("/api/tenants", tenantsRouter);
+  app.use("/api/attendance", attendanceRouter);
   app.use("/api/sites", sitesRouter);
   app.use("/api/activity", activityRouter);
   app.use("/api/users", usersRouter);

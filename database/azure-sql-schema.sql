@@ -77,6 +77,32 @@ CREATE TABLE [dbo].[AuditEvent] (
 );
 
 -- CreateTable
+CREATE TABLE [dbo].[AttendanceEvent] (
+    [id] NVARCHAR(64) NOT NULL,
+    [siteId] NVARCHAR(64) NOT NULL,
+    [title] NVARCHAR(255) NOT NULL,
+    [description] NVARCHAR(max) NOT NULL,
+    [occurredAt] DATETIME2 NOT NULL CONSTRAINT [AttendanceEvent_occurredAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [createdById] NVARCHAR(64),
+    [createdByName] NVARCHAR(255) NOT NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [AttendanceEvent_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [AttendanceEvent_pkey] PRIMARY KEY CLUSTERED ([id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[AttendanceEntry] (
+    [id] NVARCHAR(64) NOT NULL,
+    [eventId] NVARCHAR(64) NOT NULL,
+    [tenantId] NVARCHAR(64) NOT NULL,
+    [tenantName] NVARCHAR(255) NOT NULL,
+    [signature] NVARCHAR(max),
+    [signedAt] DATETIME2,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [AttendanceEntry_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [AttendanceEntry_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [AttendanceEntry_eventId_tenantId_key] UNIQUE NONCLUSTERED ([eventId],[tenantId])
+);
+
+-- CreateTable
 CREATE TABLE [dbo].[User] (
     [id] NVARCHAR(64) NOT NULL,
     [name] NVARCHAR(255) NOT NULL,
@@ -186,6 +212,12 @@ CREATE NONCLUSTERED INDEX [AuditEvent_siteId_createdAt_idx] ON [dbo].[AuditEvent
 CREATE NONCLUSTERED INDEX [AuditEvent_tenantId_createdAt_idx] ON [dbo].[AuditEvent]([tenantId], [createdAt]);
 
 -- CreateIndex
+CREATE NONCLUSTERED INDEX [AttendanceEvent_siteId_occurredAt_idx] ON [dbo].[AttendanceEvent]([siteId], [occurredAt]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [AttendanceEntry_tenantId_idx] ON [dbo].[AttendanceEntry]([tenantId]);
+
+-- CreateIndex
 CREATE NONCLUSTERED INDEX [User_entraObjectId_idx] ON [dbo].[User]([entraObjectId]);
 
 -- CreateIndex
@@ -199,6 +231,15 @@ ALTER TABLE [dbo].[TenantActivity] ADD CONSTRAINT [TenantActivity_tenantId_fkey]
 
 -- AddForeignKey
 ALTER TABLE [dbo].[AuditEvent] ADD CONSTRAINT [AuditEvent_tenantId_fkey] FOREIGN KEY ([tenantId]) REFERENCES [dbo].[Tenant]([id]) ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[AttendanceEvent] ADD CONSTRAINT [AttendanceEvent_siteId_fkey] FOREIGN KEY ([siteId]) REFERENCES [dbo].[Site]([id]) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[AttendanceEntry] ADD CONSTRAINT [AttendanceEntry_eventId_fkey] FOREIGN KEY ([eventId]) REFERENCES [dbo].[AttendanceEvent]([id]) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[AttendanceEntry] ADD CONSTRAINT [AttendanceEntry_tenantId_fkey] FOREIGN KEY ([tenantId]) REFERENCES [dbo].[Tenant]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE [dbo].[UserSite] ADD CONSTRAINT [UserSite_userId_fkey] FOREIGN KEY ([userId]) REFERENCES [dbo].[User]([id]) ON DELETE CASCADE ON UPDATE CASCADE;

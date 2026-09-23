@@ -39,9 +39,10 @@ model Site {
   /// Per-site override of the attention threshold, in hours. Null = org default.
   attentionHours Int?
 
-  tenants   Tenant[]
-  userSites UserSite[]
-  apiKeys   ApiKey[]
+  tenants          Tenant[]
+  userSites        UserSite[]
+  apiKeys          ApiKey[]
+  attendanceEvents AttendanceEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -95,8 +96,9 @@ model Tenant {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  activities TenantActivity[]
-  audit      AuditEvent[]
+  activities        TenantActivity[]
+  audit             AuditEvent[]
+  attendanceEntries AttendanceEntry[]
 
   @@index([siteId, status, attentionClockAt])
   @@index([siteId, status, unit])
@@ -146,6 +148,47 @@ model AuditEvent {
   @@index([createdAt])
   @@index([siteId, createdAt])
   @@index([tenantId, createdAt])
+}
+
+// ───────────────────────── Attendance ─────────────────────────
+
+/// One attendance-taking session at a site: a title, a description, and
+/// whoever was marked present. Append-only — nothing here is ever edited;
+/// retake it if a mistake is made, the same philosophy as AuditEvent.
+model AttendanceEvent {
+  id            String   @id @default(cuid())
+  site          Site     @relation(fields: [siteId], references: [id])
+  siteId        String
+  title         String
+  description   String
+  /// Always the server's clock at creation — never taken from the client.
+  occurredAt    DateTime @default(now())
+  createdById   String?
+  createdByName String
+  createdAt     DateTime @default(now())
+
+  entries AttendanceEntry[]
+
+  @@index([siteId, occurredAt])
+}
+
+/// One person's presence at an attendance event, with an optional signature
+/// captured on the device at the time.
+model AttendanceEntry {
+  id       String          @id @default(cuid())
+  event    AttendanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId  String
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tenantId String
+  /// Snapshot at signing time — a later name edit shouldn't rewrite history.
+  tenantName String
+  /// PNG data URL captured on the device; null if not collected.
+  signature String?
+  signedAt  DateTime?
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, tenantId])
+  @@index([tenantId])
 }
 
 // ───────────────────────── People ─────────────────────────

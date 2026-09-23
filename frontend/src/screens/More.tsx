@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { ChevronRight, History, KeyRound, Layers, LogIn, Plug, Settings2, Upload, UserRound, Users, Webhook } from "lucide-react";
+import { ChevronRight, ClipboardCheck, History, KeyRound, Layers, LogIn, Plug, Settings2, Upload, UserRound, Users, Webhook } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth";
 import { useSites, useUsers } from "@/lib/queries";
@@ -25,9 +25,12 @@ export function MorePage() {
         <ChevronRight className="h-[17px] w-[17px] shrink-0 text-muted" />
       </NavLink>
 
-      <Section title="Roster">
-        <Row to="/activity" icon={History} label="Activity log" />
-      </Section>
+      {can("roster.view") && (
+        <Section title="Roster">
+          <Row to="/attendance" icon={ClipboardCheck} label="Attendance" />
+          <Row to="/activity" icon={History} label="Activity log" />
+        </Section>
+      )}
       {isAdmin && <AdminSection />}
       <Section title="You">
         <Row to="/profile" icon={UserRound} label="Profile & settings" />

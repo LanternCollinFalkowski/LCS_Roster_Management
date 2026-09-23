@@ -4,29 +4,21 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useFileExport, type ExportFormat } from "@/lib/exportPipeline";
 import { API_BASE } from "@/lib/api";
 
-export type { ExportFormat };
-
-/** What's on screen: the site selection, the tab, and the search box. */
-export interface RosterView {
+/** What's on screen: the site selection and the search box. */
+export interface AttendanceView {
   site?: string;
-  status: "active" | "attention" | "archived";
   q: string;
 }
 
-function exportUrl(view: RosterView, format: ExportFormat, inline = false) {
-  const p = new URLSearchParams({ format, status: view.status });
+function exportUrl(view: AttendanceView, format: ExportFormat, inline = false) {
+  const p = new URLSearchParams({ format });
   if (view.site) p.set("site", view.site);
   if (view.q.trim()) p.set("q", view.q.trim());
   if (inline) p.set("inline", "1");
-  return `${API_BASE}/tenants/export?${p}`;
+  return `${API_BASE}/attendance/export?${p}`;
 }
 
-/**
- * Download (CSV / Excel / PDF) and Print for the current roster view.
- * Everything comes from the server, so the file matches the screen and the
- * export is audited there.
- */
-export function useRosterExport(view: RosterView) {
+export function useAttendanceExport(view: AttendanceView) {
   return useFileExport((format, inline) => exportUrl(view, format, inline));
 }
 
@@ -50,11 +42,11 @@ function ExportItems({ download, busy }: { download: (f: ExportFormat) => void; 
 }
 
 /** Desktop: a Print button and an Export menu, side by side. */
-export function RosterExportButtons({ view, disabled }: { view: RosterView; disabled?: boolean }) {
-  const { download, print, busy } = useRosterExport(view);
+export function AttendanceExportButtons({ view, disabled }: { view: AttendanceView; disabled?: boolean }) {
+  const { download, print, busy } = useAttendanceExport(view);
   return (
     <>
-      <Button variant="secondary" onClick={() => void print()} disabled={disabled || busy !== null} title="Print this roster">
+      <Button variant="secondary" onClick={() => void print()} disabled={disabled || busy !== null} title="Print attendance">
         {busy === "print" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />} Print
       </Button>
       <DropdownMenu>
@@ -72,9 +64,9 @@ export function RosterExportButtons({ view, disabled }: { view: RosterView; disa
   );
 }
 
-/** Phone: one "…" button beside Add, holding Print and the three formats. */
-export function RosterExportMenu({ view, disabled }: { view: RosterView; disabled?: boolean }) {
-  const { download, print, busy } = useRosterExport(view);
+/** Phone: one "…" button beside Take attendance, holding Print and the three formats. */
+export function AttendanceExportMenu({ view, disabled }: { view: AttendanceView; disabled?: boolean }) {
+  const { download, print, busy } = useAttendanceExport(view);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -91,5 +83,28 @@ export function RosterExportMenu({ view, disabled }: { view: RosterView; disable
         <ExportItems download={download} busy={busy} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** Export the selected session's attendee sheet, including signatures in its PDF. */
+export function AttendanceDetailExport({ id }: { id: string }) {
+  const { download, print, busy } = useFileExport((format, inline) =>
+    `${API_BASE}/attendance/${encodeURIComponent(id)}/export?${new URLSearchParams({ format, ...(inline ? { inline: "1" } : {}) })}`
+  );
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button variant="secondary" onClick={() => void print()} disabled={busy !== null}>
+        {busy === "print" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />} Print sheet
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="secondary" disabled={busy !== null}><Download className="h-4 w-4" /> Export sheet</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-[240px]">
+          <DropdownMenuLabel>Export this attendance</DropdownMenuLabel>
+          <ExportItems download={download} busy={busy} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }

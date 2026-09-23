@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import { prisma } from "../prisma.js";
 import { forbidden, notFound } from "../http.js";
+import { canAccessSite } from "../auth/middleware.js";
 
 const SELECT = { id: true, code: true, name: true, siteType: true, attentionHours: true } as const;
 export type ScopedSite = { id: string; code: string; name: string; siteType: string; attentionHours: number | null };
@@ -37,4 +38,13 @@ export async function sitesInScope(req: Request, raw: unknown): Promise<ScopedSi
   if (found.length === 0) throw notFound("Site not found.");
   if (allowed && found.some((s) => !allowed.includes(s.id))) throw forbidden("You aren't assigned to one of those sites.");
   return found;
+}
+
+/** Resolve a single `?site=` (code or id) and enforce access. Undefined = not given. */
+export async function resolveSite(req: Request, raw: unknown): Promise<ScopedSite | undefined> {
+  if (typeof raw !== "string" || !raw) return undefined;
+  const site = await prisma.site.findFirst({ where: { OR: [{ code: raw }, { id: raw }] }, select: SELECT });
+  if (!site) throw notFound("Site not found.");
+  if (!canAccessSite(req, site.id)) throw forbidden("You don't have access to that site.");
+  return site;
 }

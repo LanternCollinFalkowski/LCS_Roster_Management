@@ -3,6 +3,7 @@ import PDFDocument from "pdfkit";
 import type { TenantDTO } from "./roster.js";
 import type { ScopedSite } from "./siteScope.js";
 import type { RosterStatus } from "./rosterQuery.js";
+import { scopeLabel, stamp, TZ } from "./exportCommon.js";
 
 /**
  * Roster exports: CSV, Excel (a real Excel table), and a print-ready PDF.
@@ -28,20 +29,7 @@ const STATUS_LABEL: Record<RosterStatus, string> = {
   archived: "Removed",
 };
 
-export function scopeLabel(ctx: Pick<ExportContext, "sites" | "isAll">) {
-  if (ctx.sites.length === 1) return ctx.sites[0].name;
-  if (ctx.isAll) return "All my sites";
-  // Name a short selection outright; a printout that says "3 sites" doesn't say which.
-  if (ctx.sites.length <= 3) {
-    const names = ctx.sites.map((s) => s.name);
-    return names.length === 2 ? names.join(" & ") : `${names.slice(0, -1).join(", ")} & ${names[names.length - 1]}`;
-  }
-  return `${ctx.sites.length} sites`;
-}
-
-/** Lantern's sites are in New York; the server may not be (Azure runs in UTC). */
-const TZ = "America/New_York";
-const stamp = (d: Date) => d.toLocaleString("en-US", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" });
+export { scopeLabel };
 
 export function exportFilename(ctx: ExportContext, ext: string) {
   const scope = ctx.sites.length === 1 ? ctx.sites[0].code : ctx.isAll ? "all-sites" : `${ctx.sites.length}-sites`;

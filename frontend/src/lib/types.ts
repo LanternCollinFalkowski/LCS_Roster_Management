@@ -114,6 +114,36 @@ export interface DashboardData {
   recent: AuditEvent[];
 }
 
+export interface AttendanceEvent {
+  id: string;
+  siteId: string;
+  site: SiteRef;
+  title: string;
+  description: string;
+  occurredAt: string;
+  createdByName: string;
+  presentCount: number;
+  signedCount: number;
+}
+
+export interface AttendanceEntry {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  signature: string | null;
+  signedAt: string | null;
+}
+
+export interface AttendanceDetail {
+  id: string;
+  site: SiteRef;
+  title: string;
+  description: string;
+  occurredAt: string;
+  createdByName: string;
+  entries: AttendanceEntry[];
+}
+
 export interface ManagedUser extends Omit<User, "permissions" | "allSites" | "role"> {
   role: RoleSummary;
   createdAt: string;

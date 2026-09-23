@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { asyncHandler, badRequest, forbidden, HttpError, notFound } from "../http.js";
 import { canAccessSite, requireAuth, requirePermission } from "../auth/middleware.js";
-import { sitesInScope } from "../services/siteScope.js";
+import { resolveSite, sitesInScope } from "../services/siteScope.js";
 import { loadRoster } from "../services/rosterQuery.js";
 import { exportFilename, scopeLabel, toCsv, toPdf, toXlsx, type ExportContext } from "../services/rosterExport.js";
 import { actorOf, audit, diff } from "../services/audit.js";
@@ -15,15 +15,6 @@ export const tenantsRouter = Router();
 tenantsRouter.use(requireAuth);
 
 const SITE_SELECT = { id: true, code: true, name: true, attentionHours: true } as const;
-
-/** Resolve ?site= (code or id) and enforce access. Undefined = all visible sites. */
-async function resolveSite(req: Request, raw: unknown) {
-  if (typeof raw !== "string" || !raw) return undefined;
-  const site = await prisma.site.findFirst({ where: { OR: [{ code: raw }, { id: raw }] } });
-  if (!site) throw notFound("Site not found.");
-  if (!canAccessSite(req, site.id)) throw forbidden("You don't have access to that site.");
-  return site;
-}
 
 async function loadTenant(req: Request, id: string) {
   const t = await prisma.tenant.findUnique({ where: { id }, include: { site: { select: SITE_SELECT } } });

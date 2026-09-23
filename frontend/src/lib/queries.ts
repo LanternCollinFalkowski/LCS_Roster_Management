@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
-  ApiKeyRow, AuditEvent, DashboardData, ManagedUser, RoleSummary, Settings, Site, Tenant, TenantDetail, WebhookRow,
+  ApiKeyRow, AttendanceDetail, AttendanceEvent, AuditEvent, DashboardData, ManagedUser, RoleSummary, Settings, Site, Tenant, TenantDetail, WebhookRow,
 } from "./types";
 
 /**
@@ -17,6 +17,8 @@ export const qk = {
   tenant: (id: string) => ["roster", "tenant", id] as const,
   dashboard: (site: string) => ["roster", "dashboard", site] as const,
   audit: (site: string) => ["roster", "audit", site] as const,
+  attendance: (site: string, q: string) => ["attendance", "list", site, q] as const,
+  attendanceEntry: (id: string) => ["attendance", "detail", id] as const,
 };
 
 /** `?site=` for a selection: a comma list of codes, or nothing for all my sites. */
@@ -84,6 +86,36 @@ export const rosterApi = {
   keep: (id: string) => api.post<Tenant>(`/tenants/${id}/keep`),
   undoKeep: (id: string) => api.post<Tenant>(`/tenants/${id}/undo-keep`),
 };
+
+// ── Attendance ───────────────────────────────────────────────────────────
+
+/** `site`: comma list of site codes, or undefined for all of my sites. */
+export function useAttendanceList(site: string | undefined, q: string, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: qk.attendance(site ?? "all", q),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      api.get<{ items: AttendanceEvent[]; nextBefore: string | null }>(
+        `/attendance?${new URLSearchParams({ ...(site ? { site } : {}), ...(q ? { q } : {}), ...(pageParam ? { before: pageParam } : {}) })}`
+      ),
+    getNextPageParam: (lastPage) => lastPage.nextBefore,
+    enabled,
+  });
+}
+
+export function useAttendanceDetail(id: string | undefined) {
+  return useQuery({ queryKey: qk.attendanceEntry(id ?? ""), queryFn: () => api.get<AttendanceDetail>(`/attendance/${id}`), enabled: Boolean(id) });
+}
+
+export const attendanceApi = {
+  create: (body: Record<string, unknown>) => api.post<AttendanceDetail>("/attendance", body),
+};
+
+/** Wraps an attendance write so it invalidates the attendance list/detail family on success. */
+export function useAttendanceMutation<TVars, TResult = AttendanceDetail>(fn: (vars: TVars) => Promise<TResult>) {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ["attendance"] }) });
+}
 
 // ── Admin ────────────────────────────────────────────────────────────────
 

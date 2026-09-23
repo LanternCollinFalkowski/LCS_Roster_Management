@@ -1,6 +1,6 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  LayoutDashboard, Users, Layers, History, Settings,
+  LayoutDashboard, Users, Layers, History, ClipboardCheck, Settings,
   LogOut, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,7 @@ const MAIN_NAV: {
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, needs: ["roster.view"] },
   { to: "/roster", label: "Roster", icon: Users, needs: ["roster.view"], alsoActiveFor: ["/tenants"] },
   { to: "/review", label: "Review", icon: Layers, needs: ["roster.view"], badge: "review" },
+  { to: "/attendance", label: "Attendance", icon: ClipboardCheck, needs: ["roster.view"] },
   { to: "/activity", label: "Activity", icon: History, needs: ["roster.view"] },
   {
     to: "/admin",
