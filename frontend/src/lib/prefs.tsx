@@ -84,6 +84,23 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem("ln.theme.custom", customThemeColor); } catch {}
   }, [theme, customThemeColor, dark]);
 
+  // Browser chrome follows the app: Safari tints its status bar / toolbar and
+  // Android its address bar from <meta name="theme-color">. Declared after the
+  // effects above so it reads the colours they've just applied.
+  useEffect(() => {
+    const channels = getComputedStyle(document.documentElement).getPropertyValue("--c-sidebar").trim();
+    if (!channels) return;
+    let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.name = "theme-color";
+      document.head.appendChild(meta);
+    }
+    meta.content = `rgb(${channels.split(/\s+/).join(", ")})`;
+    // Also tells iOS which way round the status-bar text should be.
+    document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  }, [dark, theme, customThemeColor]);
+
   useEffect(() => {
     try { localStorage.setItem("ln.collapsed", collapsed ? "1" : "0"); } catch {}
   }, [collapsed]);

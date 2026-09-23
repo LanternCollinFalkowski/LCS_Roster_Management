@@ -82,6 +82,7 @@ export const rosterApi = {
   archive: (id: string, body: { reason: string; note?: string }) => api.post<Tenant>(`/tenants/${id}/archive`, body),
   restore: (id: string) => api.post<Tenant>(`/tenants/${id}/restore`),
   keep: (id: string) => api.post<Tenant>(`/tenants/${id}/keep`),
+  undoKeep: (id: string) => api.post<Tenant>(`/tenants/${id}/undo-keep`),
 };
 
 // ── Admin ────────────────────────────────────────────────────────────────

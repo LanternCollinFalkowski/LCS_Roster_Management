@@ -5,7 +5,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { env } from "./env.js";
 import { prisma } from "./prisma.js";
-import { errorHandler, requestId } from "./http.js";
+import { compressJson, errorHandler, requestId } from "./http.js";
 import { loadUser } from "./auth/middleware.js";
 import { authRouter } from "./routes/auth.js";
 import { tenantsRouter } from "./routes/tenants.js";
@@ -28,6 +28,7 @@ export function createApp() {
   app.use(requestId);
   app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
   app.use(cors({ origin: env.corsOrigins, credentials: true }));
+  app.use(compressJson);
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
   app.use(loadUser);

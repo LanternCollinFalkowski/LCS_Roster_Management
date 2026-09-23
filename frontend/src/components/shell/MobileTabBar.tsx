@@ -43,10 +43,10 @@ export function MobileTabBar() {
     <nav
       aria-label="Main"
       className="flex-none border-t border-hairline bg-surface px-2 pt-1.5 md:hidden"
-      // 6px above the icons, 50px of icon, then the home-indicator strip —
-      // which is the 6 / 50 / 38 the design's tab bar is built from once the
-      // inset is a real 34px (see --safe-bottom in index.css).
-      style={{ paddingBottom: "calc(4px + var(--safe-bottom))" }}
+      // At least 14px under the icons, or the home-indicator inset plus a
+      // little when the phone reports one — so the tabs never sit on the
+      // swipe-home bar (see --tabbar-bottom in index.css).
+      style={{ paddingBottom: "var(--tabbar-bottom)" }}
     >
       <div
         className="grid gap-0.5"

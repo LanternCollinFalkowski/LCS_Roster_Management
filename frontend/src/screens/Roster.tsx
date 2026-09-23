@@ -1,4 +1,4 @@
-import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus, Search, UserMinus, Users } from "lucide-react";
 import { Page, PageHeader } from "@/components/shell/AppShell";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
 import { TenantStatusBadge } from "@/components/ui/badge";
-import { EmptyState, LoadingState } from "@/components/ui/misc";
+import { EmptyState } from "@/components/ui/misc";
 import { AddResident } from "@/components/roster/AddResident";
 import { RosterExportButtons, RosterExportMenu } from "@/components/roster/RosterExport";
 import { RemoveDialog } from "@/components/roster/RemoveDialog";
@@ -22,6 +22,73 @@ import type { Tenant } from "@/lib/types";
 type Tab = "active" | "attention" | "archived";
 
 const COLLAPSED_KEY = "ln.roster.collapsed";
+
+/**
+ * Rendering ~1,900 rows in one go blocked the main thread for half a second.
+ * Instead the first screenful renders immediately (and slides in), and the rest
+ * are appended a batch per frame — everything is in place within a few hundred
+ * milliseconds, long before anyone can scroll to it, and no single frame is long
+ * enough to feel.
+ */
+const FIRST_BATCH = 40;
+const BATCH = 120;
+/** How many of the first rows get the staggered entrance. More would just delay the last of them. */
+const STAGGERED = 24;
+const STAGGER_MS = 16;
+
+function useProgressiveCount(total: number, resetKey: string) {
+  const [state, setState] = useState({ key: resetKey, count: 1 });
+  // Reset during render, not in an effect: an effect would let one full-size
+  // render through first (the old count against the new list) — the very
+  // freeze this exists to avoid.
+  const count = state.key === resetKey ? state.count : 1;
+  if (state.key !== resetKey) setState({ key: resetKey, count: 1 });
+  useEffect(() => {
+    if (count >= total) return;
+    return nextTask(() => setState((st) => ({ ...st, count: Math.min(total, st.count + 1) })));
+  }, [count, total]);
+  return Math.min(count, total);
+}
+
+/**
+ * Run `fn` as its own task, after the browser has had a chance to paint.
+ * A MessageChannel message, like React's scheduler uses: timers and rAF are
+ * throttled to ~1/s in a background tab, which would leave the list half-built
+ * for seconds when somebody switches back to it. Returns a canceller.
+ */
+function nextTask(fn: () => void): () => void {
+  let live = true;
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => {
+    if (live) fn();
+  };
+  channel.port2.postMessage(null);
+  return () => {
+    live = false;
+    channel.port1.close();
+  };
+}
+
+/** Placeholder rows while the roster downloads — the shape of the list, shimmering. */
+function RosterSkeleton() {
+  return (
+    <div className="border-y border-hairline bg-surface lg:rounded-card lg:border-x" aria-busy="true" aria-label="Loading roster">
+      {Array.from({ length: 9 }, (_, i) => (
+        <div
+          key={i}
+          className="page-list-item-enter flex items-center gap-3 border-b border-hairline px-4 py-3 last:border-0"
+          style={{ animationDelay: `${i * 35}ms` }}
+        >
+          <span className="bill-skeleton-shimmer h-4 w-10 shrink-0 rounded-input" />
+          <span className="min-w-0 flex-1 space-y-1.5">
+            <span className="bill-skeleton-shimmer block h-3.5 rounded-input" style={{ width: `${46 + ((i * 37) % 30)}%` }} />
+            <span className="bill-skeleton-shimmer block h-2.5 w-24 rounded-input" />
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Which site groups are folded, remembered per device. */
 function useCollapsedSites() {
@@ -40,13 +107,16 @@ function useCollapsedSites() {
       // Not worth failing over.
     }
   }, [collapsed]);
-  const toggle = (siteId: string) =>
-    setCollapsed((c) => {
-      const next = new Set(c);
-      if (next.has(siteId)) next.delete(siteId);
-      else next.add(siteId);
-      return next;
-    });
+  const toggle = useCallback(
+    (siteId: string) =>
+      setCollapsed((c) => {
+        const next = new Set(c);
+        if (next.has(siteId)) next.delete(siteId);
+        else next.add(siteId);
+        return next;
+      }),
+    []
+  );
   return { collapsed, setCollapsed, toggle };
 }
 
@@ -68,6 +138,11 @@ export function RosterPage() {
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Tenant | null>(null);
   const { remove, restore } = useRosterActions();
+  // Rows are memoised (see RosterRow), so what they're handed must be stable —
+  // a fresh function per render would re-render every row on every batch.
+  const restoreRef = useRef(restore);
+  restoreRef.current = restore;
+  const onRestore = useCallback((t: Tenant) => void restoreRef.current(t), []);
   const { collapsed, setCollapsed, toggle: toggleSite } = useCollapsedSites();
 
   // "attention" is a view of the active list, so it reuses that request.
@@ -97,9 +172,30 @@ export function RosterPage() {
     }
     return m;
   }, [rows]);
-  // A search looks through folded sites too — hiding a match would read as "not found".
-  const isFolded = (siteId: string) => grouped && !query && collapsed.has(siteId);
   const allFolded = grouped && [...groups.keys()].every((id) => collapsed.has(id));
+
+  // The list, cut into chunks: the first screenful, then fixed-size batches.
+  // Each chunk is a memoised component with a stable slice, so adding one makes
+  // React compare a dozen chunks rather than ~1,900 rows. Site headings are
+  // decided here, across chunk boundaries.
+  const chunks = useMemo(() => {
+    const out: { t: Tenant; heading: boolean; index: number }[][] = [];
+    let size = FIRST_BATCH;
+    for (let i = 0; i < rows.length; i += size, size = BATCH) {
+      out.push(
+        rows.slice(i, i + size).map((t, j) => ({
+          t,
+          index: i + j,
+          heading: grouped && t.siteId !== rows[i + j - 1]?.siteId,
+        }))
+      );
+    }
+    return out;
+  }, [rows, grouped]);
+  // A search looks through folded sites too — hiding a match would read as "not found".
+  const folded = useMemo(() => (grouped && !query ? collapsed : NO_SITES), [grouped, query, collapsed]);
+  // Restart the progressive render whenever the list itself changes.
+  const shownChunks = useProgressiveCount(chunks.length, `${param ?? "all"}|${tab}|${query}`);
 
   const onRoster = selected.reduce((n, s) => n + s.activeCount, 0);
   const attention = tab === "archived" ? selected.reduce((n, s) => n + s.attentionCount, 0) : all.filter((t) => t.needsAttention).length;
@@ -199,7 +295,7 @@ export function RosterPage() {
         </div>
 
         {sitesLoading || isLoading ? (
-          <LoadingState />
+          <RosterSkeleton />
         ) : selected.length === 0 ? (
           <EmptyState title="No sites assigned" hint="You aren't assigned to any sites yet, so there's no roster to show. Ask an administrator to add you to one." icon={<Users className="h-8 w-8" />} />
         ) : rows.length === 0 ? (
@@ -231,7 +327,9 @@ export function RosterPage() {
             </div>
           )}
           <Card className="rounded-none border-x-0 md:rounded-card md:border-x">
-            <div className="hidden grid-cols-[88px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_120px_32px] gap-3 border-b border-hairline px-4 py-2.5 text-micro font-bold uppercase tracking-[0.04em] text-muted md:grid">
+            {/* The table layout needs ~1000px; below that (phones and iPads in
+                portrait) each row is the stacked list form. */}
+            <div className="hidden grid-cols-[88px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_120px_32px] gap-3 border-b border-hairline px-4 py-2.5 text-micro font-bold uppercase tracking-[0.04em] text-muted lg:grid">
               <span>Unit</span>
               <span>Name</span>
               <span>{tab === "archived" ? "Removed" : "Last on a form"}</span>
@@ -240,84 +338,20 @@ export function RosterPage() {
               <span />
             </div>
             <ul>
-              {rows.map((t, i) => (
-                <Fragment key={t.id}>
-                {grouped && t.siteId !== rows[i - 1]?.siteId && (
-                  <li className="sticky top-0 z-[1] border-b border-hairline bg-subtle">
-                    <button
-                      type="button"
-                      onClick={() => toggleSite(t.siteId)}
-                      aria-expanded={!isFolded(t.siteId)}
-                      className="flex min-h-[44px] w-full items-center gap-2 px-4 text-left hover:bg-subtle2 md:min-h-[34px]"
-                    >
-                      <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted transition-transform", isFolded(t.siteId) && "-rotate-90")} />
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-bold uppercase tracking-[0.04em] text-muted">{t.site?.name}</span>
-                      {(groups.get(t.siteId)?.attention ?? 0) > 0 && tab === "active" && (
-                        <span className="shrink-0 rounded-pill bg-status-amberBg px-1.5 text-micro font-bold tabular text-status-amberText">
-                          {groups.get(t.siteId)!.attention}
-                        </span>
-                      )}
-                      <span className="shrink-0 text-micro tabular text-muted">{groups.get(t.siteId)?.count}</span>
-                    </button>
-                  </li>
-                )}
-                {!isFolded(t.siteId) && (
-                <li className="border-b border-hairline last:border-0">
-                  <div className="group flex items-center gap-3 px-4 py-2.5 hover:bg-rowhover md:grid md:grid-cols-[88px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_120px_32px] md:py-2">
-                    <span className="w-[52px] shrink-0 text-center font-heading text-[14px] font-extrabold tabular text-ink md:w-auto md:text-left md:text-[13.5px]">
-                      {t.unit ?? "—"}
-                    </span>
-                    <Link to={`/tenants/${t.id}`} className="flex min-w-0 flex-1 items-center gap-2.5 md:flex-none">
-                      <Avatar name={t.displayName} color={tintFor(t.id)} size={30} className="hidden md:inline-flex" />
-                      <span className="min-w-0">
-                        <span className="flex items-center gap-1.5">
-                          <span className="truncate text-[14.5px] font-semibold text-ink md:text-[13.5px]">{t.displayName}</span>
-                          {t.needsAttention && <span className="h-2 w-2 shrink-0 rounded-full bg-status-amberDot md:hidden" aria-label="Needs review" />}
-                        </span>
-                        <span className="block truncate text-micro text-muted md:hidden">
-                          {tab === "archived"
-                            ? `${multiSite ? `${t.site?.name} · ` : ""}Removed ${formatDate(t.archivedAt)} · ${t.archiveReason ?? ""}`
-                            : t.lastActivityAt
-                              ? `On a form ${relativeTime(t.lastActivityAt)}`
-                              : t.preferredName
-                                ? `${t.firstName} ${t.lastName}`
-                                : `Added ${formatDate(t.createdAt)}`}
-                        </span>
-                        {t.preferredName && <span className="hidden truncate text-micro text-muted md:block">{t.firstName} {t.lastName}</span>}
-                      </span>
-                    </Link>
-                    <span className="hidden truncate text-[13px] text-muted md:block">
-                      {tab === "archived" ? formatDate(t.archivedAt) : t.lastActivityAt ? relativeTime(t.lastActivityAt) : "—"}
-                    </span>
-                    <span className="hidden truncate text-[13px] text-muted md:block">
-                      {tab === "archived" ? t.archiveReason : formatDate(t.moveInDate)}
-                    </span>
-                    <span className="hidden md:block">
-                      <TenantStatusBadge status={t.status} needsAttention={t.needsAttention} />
-                    </span>
-                    <span className="flex shrink-0 items-center">
-                      {tab === "archived" ? (
-                        can("roster.restore") && (
-                          <Button size="sm" variant="ghost" onClick={() => void restore(t)} className="min-h-[40px] md:min-h-0">
-                            Restore
-                          </Button>
-                        )
-                      ) : can("roster.archive") ? (
-                        <button
-                          onClick={() => setRemoving(t)}
-                          title="Remove from roster"
-                          className="flex h-10 w-10 items-center justify-center rounded-input text-muted hover:bg-status-redBg hover:text-status-redText md:h-8 md:w-8 md:opacity-0 md:group-hover:opacity-100"
-                        >
-                          <UserMinus className="h-4 w-4" />
-                        </button>
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted" />
-                      )}
-                    </span>
-                  </div>
-                </li>
-                )}
-                </Fragment>
+              {chunks.slice(0, shownChunks).map((chunk) => (
+                <RosterChunk
+                  key={chunk[0].t.id}
+                  entries={chunk}
+                  folded={folded}
+                  groups={groups}
+                  tab={tab}
+                  multiSite={multiSite}
+                  canRestore={can("roster.restore")}
+                  canArchive={can("roster.archive")}
+                  onToggleSite={toggleSite}
+                  onRemove={setRemoving}
+                  onRestore={onRestore}
+                />
               ))}
             </ul>
           </Card>
@@ -338,3 +372,162 @@ export function RosterPage() {
     </div>
   );
 }
+
+const NO_SITES: Set<string> = new Set();
+
+/** One batch of the list. Re-renders only when its own rows, the folds or the tab change. */
+const RosterChunk = memo(function RosterChunk({
+  entries, folded, groups, tab, multiSite, canRestore, canArchive, onToggleSite, onRemove, onRestore,
+}: {
+  entries: { t: Tenant; heading: boolean; index: number }[];
+  folded: Set<string>;
+  groups: Map<string, { count: number; attention: number }>;
+  tab: Tab;
+  multiSite: boolean;
+  canRestore: boolean;
+  canArchive: boolean;
+  onToggleSite: (siteId: string) => void;
+  onRemove: (t: Tenant) => void;
+  onRestore: (t: Tenant) => void;
+}) {
+  return (
+    <>
+      {entries.map(({ t, heading, index }) => (
+        <Fragment key={t.id}>
+          {heading && (
+            <SiteHeading
+              siteId={t.siteId}
+              name={t.site?.name ?? ""}
+              folded={folded.has(t.siteId)}
+              count={groups.get(t.siteId)?.count ?? 0}
+              attention={tab === "active" ? groups.get(t.siteId)?.attention ?? 0 : 0}
+              onToggle={onToggleSite}
+            />
+          )}
+          {!folded.has(t.siteId) && (
+            <RosterRow
+              t={t}
+              tab={tab}
+              multiSite={multiSite}
+              // Only the first screenful slides in; rows appended after it are
+              // below the fold and simply appear.
+              enterDelay={index < STAGGERED ? index * STAGGER_MS : null}
+              canRestore={canRestore}
+              canArchive={canArchive}
+              onRemove={onRemove}
+              onRestore={onRestore}
+            />
+          )}
+        </Fragment>
+      ))}
+    </>
+  );
+});
+
+/** A site's heading in a grouped roster. Memoised for the same reason as RosterRow. */
+const SiteHeading = memo(function SiteHeading({
+  siteId, name, folded, count, attention, onToggle,
+}: {
+  siteId: string;
+  name: string;
+  folded: boolean;
+  count: number;
+  attention: number;
+  onToggle: (siteId: string) => void;
+}) {
+  return (
+    <li className="sticky top-0 z-[1] border-b border-hairline bg-subtle">
+      <button
+        type="button"
+        onClick={() => onToggle(siteId)}
+        aria-expanded={!folded}
+        className="flex min-h-[44px] w-full items-center gap-2 px-4 text-left hover:bg-subtle2 lg:min-h-[34px]"
+      >
+        <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted transition-transform", folded && "-rotate-90")} />
+        <span className="min-w-0 flex-1 truncate text-[12px] font-bold uppercase tracking-[0.04em] text-muted">{name}</span>
+        {attention > 0 && (
+          <span className="shrink-0 rounded-pill bg-status-amberBg px-1.5 text-micro font-bold tabular text-status-amberText">{attention}</span>
+        )}
+        <span className="shrink-0 text-micro tabular text-muted">{count}</span>
+      </button>
+    </li>
+  );
+});
+
+/**
+ * One resident. Memoised: the list grows a batch at a time, and without this
+ * every batch re-rendered every row already on screen — work that grew with the
+ * square of the list and took seconds at ~1,900 people.
+ */
+const RosterRow = memo(function RosterRow({
+  t, tab, multiSite, enterDelay, canRestore, canArchive, onRemove, onRestore,
+}: {
+  t: Tenant;
+  tab: Tab;
+  multiSite: boolean;
+  enterDelay: number | null;
+  canRestore: boolean;
+  canArchive: boolean;
+  onRemove: (t: Tenant) => void;
+  onRestore: (t: Tenant) => void;
+}) {
+  return (
+    <li
+      className={cn("roster-row border-b border-hairline last:border-0", enterDelay !== null && "page-list-item-enter")}
+      style={enterDelay !== null ? { animationDelay: `${enterDelay}ms` } : undefined}
+    >
+      <div className="group flex items-center gap-3 px-4 py-2.5 hover:bg-rowhover lg:grid lg:grid-cols-[88px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_120px_32px] lg:py-2">
+        <span className="w-[52px] shrink-0 text-center font-heading text-[14px] font-extrabold tabular text-ink lg:w-auto lg:text-left lg:text-[13.5px]">
+          {t.unit ?? "—"}
+        </span>
+        <Link to={`/tenants/${t.id}`} className="flex min-w-0 flex-1 items-center gap-2.5 lg:flex-none">
+          <Avatar name={t.displayName} color={tintFor(t.id)} size={30} className="hidden lg:inline-flex" />
+          <span className="min-w-0">
+            <span className="flex items-center gap-1.5">
+              <span className="truncate text-[14.5px] font-semibold text-ink lg:text-[13.5px]">{t.displayName}</span>
+              {t.needsAttention && <span className="h-2 w-2 shrink-0 rounded-full bg-status-amberDot lg:hidden" aria-label="Needs review" />}
+            </span>
+            <span className="block truncate text-micro text-muted lg:hidden">
+              {tab === "archived"
+                ? `${multiSite ? `${t.site?.name} · ` : ""}Removed ${formatDate(t.archivedAt)} · ${t.archiveReason ?? ""}`
+                : t.lastActivityAt
+                  ? `On a form ${relativeTime(t.lastActivityAt)}`
+                  : t.preferredName
+                    ? `${t.firstName} ${t.lastName}`
+                    : `Added ${formatDate(t.createdAt)}`}
+            </span>
+            {t.preferredName && <span className="hidden truncate text-micro text-muted lg:block">{t.firstName} {t.lastName}</span>}
+          </span>
+        </Link>
+        <span className="hidden truncate text-[13px] text-muted lg:block">
+          {tab === "archived" ? formatDate(t.archivedAt) : t.lastActivityAt ? relativeTime(t.lastActivityAt) : "—"}
+        </span>
+        <span className="hidden truncate text-[13px] text-muted lg:block">
+          {tab === "archived" ? t.archiveReason : formatDate(t.moveInDate)}
+        </span>
+        <span className="hidden lg:block">
+          <TenantStatusBadge status={t.status} needsAttention={t.needsAttention} />
+        </span>
+        <span className="flex shrink-0 items-center">
+          {tab === "archived" ? (
+            canRestore && (
+              <Button size="sm" variant="ghost" onClick={() => onRestore(t)} className="min-h-[40px] lg:min-h-0">
+                Restore
+              </Button>
+            )
+          ) : canArchive ? (
+            <button
+              onClick={() => onRemove(t)}
+              title="Remove from roster"
+              className="flex h-10 w-10 items-center justify-center rounded-input text-muted hover:bg-status-redBg hover:text-status-redText lg:h-8 lg:w-8 lg:opacity-0 lg:group-hover:opacity-100"
+            >
+              <UserMinus className="h-4 w-4" />
+            </button>
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted" />
+          )}
+        </span>
+      </div>
+    </li>
+  );
+});

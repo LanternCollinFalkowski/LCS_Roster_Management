@@ -15,7 +15,7 @@ import { MobileTabBar } from "./MobileTabBar";
  */
 export function AppShell() {
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-appbg md:flex-row">
+    <div className="app-height flex flex-col overflow-hidden bg-appbg md:flex-row">
       <Sidebar />
       {/* scrollbar-gutter keeps the scrollbar's space reserved even when the
           page is short, so content doesn't jump sideways when a list grows or
@@ -70,7 +70,9 @@ export function PageHeader({
         <h1 className="text-[23px] font-heading font-extrabold text-ink md:text-[24px]">{title}</h1>
         {subtitle && <p className="mt-1 text-[13px] text-muted md:text-[13.5px]">{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {/* Wraps rather than running off the edge when the column is narrow
+          (an iPad in portrait beside the sidebar). */}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

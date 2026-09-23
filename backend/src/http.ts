@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import zlib from "node:zlib";
 import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 
@@ -88,4 +89,33 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     error: "Something went wrong on our end. Quote this reference if you report it.",
     requestId: id,
   });
+}
+
+/** Below this, compressing costs more than it saves. */
+const COMPRESS_MIN_BYTES = 16 * 1024;
+
+/**
+ * Gzip large JSON responses — the whole-organisation roster is ~1.2 MB of JSON
+ * and ~10% of that gzipped, which is the difference that matters on a phone
+ * signal. Done here with zlib rather than a dependency: only `res.json` bodies
+ * are touched (exports send their own binary files), compression runs off the
+ * event loop, and anything small or from a client that can't accept gzip goes
+ * out exactly as before.
+ */
+export function compressJson(req: Request, res: Response, next: NextFunction) {
+  if (!/\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""))) return next();
+  const send = res.send.bind(res);
+  res.json = (body: unknown) => {
+    const text = JSON.stringify(body);
+    if (!res.get("Content-Type")) res.type("application/json");
+    res.vary("Accept-Encoding");
+    if (Buffer.byteLength(text) < COMPRESS_MIN_BYTES) return send(text);
+    zlib.gzip(text, { level: 6 }, (err, gz) => {
+      if (err || res.headersSent) return err ? send(text) : undefined;
+      res.setHeader("Content-Encoding", "gzip");
+      send(gz);
+    });
+    return res;
+  };
+  next();
 }

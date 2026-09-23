@@ -320,17 +320,21 @@ tenantsRouter.post(
         archivedById: null,
         archiveReason: null,
         moveOutDate: null,
-        // Restoring is a fresh look: don't drop them straight back in the queue.
-        lastKeptAt: now,
-        lastKeptById: req.user!.userId,
-        attentionClockAt: clockFrom({ ...t, lastKeptAt: now }),
+        // Undoing your own removal puts the record back exactly as it was — if
+        // they were due for review, they still are. A manager restoring an
+        // older removal is a fresh look, so that counts as a confirmation.
+        ...(recentOwn
+          ? {}
+          : { lastKeptAt: now, lastKeptById: req.user!.userId, attentionClockAt: clockFrom({ ...t, lastKeptAt: now }) }),
         version: { increment: 1 },
       },
       include: { site: { select: SITE_SELECT } },
     });
     await audit({
       actor: actorOf(req),
-      action: "tenant.restored",
+      // Distinct action for an undo: it isn't a confirmation, and undo-keep
+      // reads "tenant.restored" as one.
+      action: recentOwn ? "tenant.remove_undone" : "tenant.restored",
       tenantId: t.id,
       siteId: t.siteId,
       summary: recentOwn ? `Undid removal of ${displayName(t)}` : `Restored ${displayName(t)} to ${t.site.name}`,
@@ -359,6 +363,69 @@ tenantsRouter.post(
       siteId: t.siteId,
       summary: `Confirmed ${displayName(t)} is still at ${t.site.name}`,
       webhook: { event: "tenant.kept", data: publicTenant(after) },
+    });
+    res.json(serializeTenant(after, await attentionHours()));
+  })
+);
+
+/**
+ * Undo your own recent Keep — the Review screen's Undo.
+ *
+ * The earlier "confirmed" time is rebuilt from the audit trail (the keep or
+ * restore before this one), never taken from the client, so an undo can only
+ * put the record back the way it was. Limited to the person who kept, within
+ * ten minutes, and only while that keep is still the latest one.
+ */
+const UNDO_WINDOW_MS = 10 * 60_000;
+
+tenantsRouter.post(
+  "/:id/undo-keep",
+  requirePermission("roster.edit"),
+  asyncHandler(async (req, res) => {
+    const t = await loadTenant(req, req.params.id);
+    // Walk the confirmation history newest-first, cancelling each keep that a
+    // later undo already reversed, to find the live keep (the one being undone)
+    // and the live confirmation before it.
+    const events = await prisma.auditEvent.findMany({
+      where: { tenantId: t.id, action: { in: ["tenant.kept", "tenant.restored", "tenant.keep_undone"] } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+    const live: typeof events = [];
+    let cancelled = 0;
+    for (const e of events) {
+      if (e.action === "tenant.keep_undone") cancelled++;
+      else if (e.action === "tenant.kept" && cancelled > 0) cancelled--;
+      else live.push(e);
+      if (live.length === 2) break;
+    }
+    const [latest, previous] = live;
+    if (
+      !latest ||
+      latest.action !== "tenant.kept" ||
+      latest.actorId !== req.user!.userId ||
+      t.lastKeptById !== req.user!.userId ||
+      Date.now() - latest.createdAt.getTime() > UNDO_WINDOW_MS
+    ) {
+      throw badRequest("That can't be undone any more.");
+    }
+    const lastKeptAt = previous?.createdAt ?? null;
+    const after = await prisma.tenant.update({
+      where: { id: t.id },
+      data: {
+        lastKeptAt,
+        lastKeptById: previous?.actorId ?? null,
+        attentionClockAt: clockFrom({ ...t, lastKeptAt }),
+      },
+      include: { site: { select: SITE_SELECT } },
+    });
+    await audit({
+      actor: actorOf(req),
+      action: "tenant.keep_undone",
+      tenantId: t.id,
+      siteId: t.siteId,
+      summary: `Undid keep of ${displayName(t)} — back in review`,
+      webhook: { event: "tenant.updated", data: { ...publicTenant(after), changed: ["lastKeptAt"] } },
     });
     res.json(serializeTenant(after, await attentionHours()));
   })

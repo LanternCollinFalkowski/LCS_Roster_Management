@@ -41,7 +41,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       {/* Phone: pinned above the bottom tab bar, full width. Desktop: bottom-right. */}
       <div
-        className="fixed inset-x-3 bottom-[calc(76px+var(--safe-bottom))] z-40 flex flex-col gap-2 md:inset-x-auto md:bottom-5 md:right-5"
+        className="fixed inset-x-3 bottom-[calc(66px+var(--tabbar-bottom))] z-40 flex flex-col gap-2 md:inset-x-auto md:bottom-5 md:right-5"
       >
         {toasts.map((t) => (
           <div

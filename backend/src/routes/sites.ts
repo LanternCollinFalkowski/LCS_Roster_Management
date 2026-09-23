@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { asyncHandler, badRequest, notFound } from "../http.js";
 import { requireAuth, requirePermission } from "../auth/middleware.js";
@@ -11,8 +12,11 @@ export const sitesRouter = Router();
 sitesRouter.use(requireAuth);
 
 /**
- * Sites the caller can see, each with live roster counts. Counting is two
- * grouped queries rather than one per site, so this stays cheap at 30+ sites.
+ * Sites the caller can see, each with live roster counts. Every screen loads
+ * this before it can show anything (the site picker gates Roster, Review,
+ * Dashboard…), so it has to stay to two grouped queries total, not one per
+ * site — a per-site `count()` loop here once meant 30+ serial round-trips
+ * before the roster could even start rendering.
  */
 sitesRouter.get(
   "/",
@@ -32,19 +36,24 @@ sitesRouter.get(
       where: { siteId: { in: ids }, status: "active" },
       _count: { _all: true },
     });
-    const attention = await Promise.all(
-      sites.map((s) =>
-        prisma.tenant.count({
-          where: { siteId: s.id, status: "active", attentionClockAt: { lt: cutoff(s.attentionHours ?? orgHours) } },
-        })
-      )
-    );
+    // One query for every site's attention count: each has its own threshold,
+    // so it's an OR of per-site conditions rather than a single groupBy WHERE.
+    const attentionRows = ids.length
+      ? await prisma.$queryRaw<{ siteId: string; cnt: bigint | number }[]>`
+          SELECT siteId, COUNT(*) as cnt FROM Tenant
+          WHERE status = 'active' AND (${Prisma.join(
+            sites.map((s) => Prisma.sql`(siteId = ${s.id} AND attentionClockAt < ${cutoff(s.attentionHours ?? orgHours)})`),
+            " OR "
+          )})
+          GROUP BY siteId`
+      : [];
     const activeBy = new Map(active.map((a) => [a.siteId, a._count._all]));
+    const attentionBy = new Map(attentionRows.map((a) => [a.siteId, Number(a.cnt)]));
     res.json(
-      sites.map((s, i) => ({
+      sites.map((s) => ({
         ...s,
         activeCount: activeBy.get(s.id) ?? 0,
-        attentionCount: attention[i],
+        attentionCount: attentionBy.get(s.id) ?? 0,
         effectiveAttentionHours: s.attentionHours ?? orgHours,
       }))
     );

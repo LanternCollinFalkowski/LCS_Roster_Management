@@ -22,7 +22,7 @@ import { AdminApiKeys, AdminWebhooks, AdminWordPress } from "./screens/admin/Int
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const location = useLocation();
-  if (loading) return <div className="grid h-screen place-items-center bg-appbg"><LoadingState /></div>;
+  if (loading) return <div className="app-height grid place-items-center bg-appbg"><LoadingState /></div>;
   // Carry the requested path through sign-in so a shared link lands where it pointed.
   if (!user) {
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}`);

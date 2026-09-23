@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { asyncHandler } from "../http.js";
 import { requireAuth, requirePermission } from "../auth/middleware.js";
@@ -34,7 +34,14 @@ activityRouter.get(
   })
 );
 
-/** Everything the Dashboard needs in one round trip. */
+/**
+ * Everything the Dashboard needs in one round trip.
+ *
+ * The per-site breakdown used to run 4 queries per site (active, attention,
+ * added-this-week, removed-this-week) — 80+ serial round trips for an admin
+ * with 20 sites before the dashboard could paint. Each is now one query
+ * grouped by siteId, so the total stays fixed regardless of site count.
+ */
 activityRouter.get(
   "/dashboard",
   requirePermission("roster.view"),
@@ -45,29 +52,46 @@ activityRouter.get(
     const weekAgo = new Date(Date.now() - 7 * 86400_000);
     const orgHours = await attentionHours();
 
-    const [active, addedWeek, removedWeek, attentionPerSite, recent] = await Promise.all([
+    const [active, addedWeek, removedWeek, activeBySite, attentionRows, addedBySite, removedBySite, recent] = await Promise.all([
       prisma.tenant.count({ where: { ...siteWhere, status: "active" } }),
       prisma.tenant.count({ where: { ...siteWhere, createdAt: { gte: weekAgo } } }),
       prisma.tenant.count({ where: { ...siteWhere, status: "archived", archivedAt: { gte: weekAgo } } }),
-      Promise.all(
-        sites.map(async (s) => {
-          const [activeCount, attention, added, removed] = await Promise.all([
-            prisma.tenant.count({ where: { siteId: s.id, status: "active" } }),
-            prisma.tenant.count({
-              where: { siteId: s.id, status: "active", attentionClockAt: { lt: cutoff(s.attentionHours ?? orgHours) } },
-            }),
-            prisma.tenant.count({ where: { siteId: s.id, createdAt: { gte: weekAgo } } }),
-            prisma.tenant.count({ where: { siteId: s.id, status: "archived", archivedAt: { gte: weekAgo } } }),
-          ]);
-          return { ...s, activeCount, attentionCount: attention, addedWeek: added, removedWeek: removed };
-        })
-      ),
+      prisma.tenant.groupBy({ by: ["siteId"], where: { ...siteWhere, status: "active" }, _count: { _all: true } }),
+      // Per-site attention thresholds, so it's an OR of per-site conditions
+      // rather than a single groupBy WHERE (see sites.ts for the same pattern).
+      siteIds.length
+        ? prisma.$queryRaw<{ siteId: string; cnt: bigint | number }[]>`
+            SELECT siteId, COUNT(*) as cnt FROM Tenant
+            WHERE status = 'active' AND (${Prisma.join(
+              sites.map((s) => Prisma.sql`(siteId = ${s.id} AND attentionClockAt < ${cutoff(s.attentionHours ?? orgHours)})`),
+              " OR "
+            )})
+            GROUP BY siteId`
+        : Promise.resolve([] as { siteId: string; cnt: bigint | number }[]),
+      prisma.tenant.groupBy({ by: ["siteId"], where: { ...siteWhere, createdAt: { gte: weekAgo } }, _count: { _all: true } }),
+      prisma.tenant.groupBy({
+        by: ["siteId"],
+        where: { ...siteWhere, status: "archived", archivedAt: { gte: weekAgo } },
+        _count: { _all: true },
+      }),
       prisma.auditEvent.findMany({
         where: { siteId: { in: siteIds }, action: { startsWith: "tenant." } },
         orderBy: { createdAt: "desc" },
         take: 12,
       }),
     ]);
+
+    const activeBy = new Map(activeBySite.map((a) => [a.siteId, a._count._all]));
+    const attentionBy = new Map(attentionRows.map((a) => [a.siteId, Number(a.cnt)]));
+    const addedBy = new Map(addedBySite.map((a) => [a.siteId, a._count._all]));
+    const removedBy = new Map(removedBySite.map((a) => [a.siteId, a._count._all]));
+    const attentionPerSite = sites.map((s) => ({
+      ...s,
+      activeCount: activeBy.get(s.id) ?? 0,
+      attentionCount: attentionBy.get(s.id) ?? 0,
+      addedWeek: addedBy.get(s.id) ?? 0,
+      removedWeek: removedBy.get(s.id) ?? 0,
+    }));
 
     res.json({
       totals: {

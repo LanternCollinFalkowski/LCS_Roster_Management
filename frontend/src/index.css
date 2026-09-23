@@ -80,6 +80,10 @@
      for it. The `env()` default means a real iPhone still wins. */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Breathing room under the phone tab bar even when the browser reports no
+     inset (Safari with its toolbar showing, Android gesture bars). On an iPhone
+     that reports the home-indicator inset, the larger of the two wins. */
+  --tabbar-bottom: max(20px, calc(8px + var(--safe-bottom)));
 }
 
 .dark {
@@ -629,4 +633,30 @@ h6 {
      plain rule here and go on animating for somebody who asked it not to. */
   .presence-cursor { transition-duration: 0ms !important; }
   .presence-field-ring { animation: none; }
+}
+
+/*
+ * Full-height app shell. 100vh on iOS Safari is the height with the toolbar
+ * hidden, so a 100vh layout runs underneath the toolbar and the home indicator
+ * and the bottom tab bar ends up there. 100dvh is the height actually visible;
+ * 100vh stays as the fallback for browsers without dynamic units.
+ */
+.app-height {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/*
+ * Roster rows skip layout and paint while off screen. The list is built in
+ * batches (see Roster.tsx), and without this each batch made the browser
+ * re-lay-out every row already there — hundreds of off-screen rows per frame.
+ * The intrinsic size is the row's real height, so the scrollbar stays honest
+ * and nothing jumps as rows come into view ("auto" remembers the measured size).
+ */
+.roster-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 57px;
+}
+@media (min-width: 1024px) {
+  .roster-row { contain-intrinsic-size: auto 49px; }
 }

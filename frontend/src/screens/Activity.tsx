@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { CheckCircle2, History, PencilLine, RotateCcw, Settings2, UserMinus, UserPlus } from "lucide-react";
+import { CheckCircle2, History, PencilLine, RotateCcw, Settings2, Undo2, UserMinus, UserPlus } from "lucide-react";
 import { MobileBackLink, Page, PageHeader } from "@/components/shell/AppShell";
 import { Card } from "@/components/ui/card";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
@@ -13,6 +13,8 @@ const ICONS: Record<string, typeof History> = {
   "tenant.archived": UserMinus,
   "tenant.restored": RotateCcw,
   "tenant.kept": CheckCircle2,
+  "tenant.keep_undone": Undo2,
+  "tenant.remove_undone": Undo2,
 };
 
 /** The audit trail: who changed which roster, when, and why. */

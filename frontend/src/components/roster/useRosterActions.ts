@@ -24,11 +24,12 @@ export function useRosterActions() {
     }
   }
 
-  async function remove(t: Tenant, reason: string, note?: string): Promise<boolean> {
+  /** `onUndo` replaces the toast's default Undo (a plain restore) — the Review screen uses its own. */
+  async function remove(t: Tenant, reason: string, note?: string, opts: { onUndo?: () => void } = {}): Promise<boolean> {
     try {
       await rosterApi.archive(t.id, { reason, note: note || undefined });
       toast(`Removed ${t.displayName}.`, "success", {
-        action: { label: "Undo", onClick: () => void restore(t, false) },
+        action: { label: "Undo", onClick: opts.onUndo ?? (() => void restore(t, false)) },
       });
       return true;
     } catch (e) {
@@ -39,10 +40,10 @@ export function useRosterActions() {
     }
   }
 
-  async function keep(t: Tenant): Promise<boolean> {
+  async function keep(t: Tenant, opts: { onUndo?: () => void } = {}): Promise<boolean> {
     try {
       await rosterApi.keep(t.id);
-      toast(`Kept ${t.displayName}.`, "info");
+      toast(`Kept ${t.displayName}.`, "info", opts.onUndo ? { action: { label: "Undo", onClick: opts.onUndo }, duration: 5000 } : {});
       return true;
     } catch (e) {
       toast(e instanceof Error ? e.message : "Could not update.", "error");
