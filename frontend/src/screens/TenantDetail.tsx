@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, ChevronLeft, ClipboardList, History, RotateCcw, UserMinus } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronLeft, ClipboardList, History, RotateCcw } from "lucide-react";
 import { Page } from "@/components/shell/AppShell";
 import { PhoneHeader } from "@/components/shell/PhoneHeader";
 import { Card } from "@/components/ui/card";
@@ -12,6 +12,7 @@ import { TenantStatusBadge } from "@/components/ui/badge";
 import { LoadingState, EmptyState } from "@/components/ui/misc";
 import { useToast } from "@/components/ui/toast";
 import { RemoveDialog } from "@/components/roster/RemoveDialog";
+import { RemoveResidentIcon } from "@/components/roster/RemoveResidentIcon";
 import { useRosterActions } from "@/components/roster/useRosterActions";
 import { rosterApi, useRosterMutation, useTenant } from "@/lib/queries";
 import { useAuth } from "@/lib/auth";
@@ -123,7 +124,7 @@ export function TenantDetailPage() {
                   )}
                   {can("roster.archive") && (
                     <Button variant="outlineDanger" onClick={() => setRemoving(true)} className="min-h-[44px] flex-1 md:h-9 md:min-h-0">
-                      <UserMinus className="h-4 w-4" /> Remove
+                      <RemoveResidentIcon className="h-4 w-4" /> Remove
                     </Button>
                   )}
                 </>

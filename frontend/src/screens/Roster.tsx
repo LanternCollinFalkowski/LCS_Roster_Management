@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus, Search, UserMinus, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus, Search, Users } from "lucide-react";
 import { Page, PageHeader } from "@/components/shell/AppShell";
 import { PhoneHeader } from "@/components/shell/PhoneHeader";
 import { Card } from "@/components/ui/card";
@@ -12,6 +12,7 @@ import { EmptyState } from "@/components/ui/misc";
 import { AddResident } from "@/components/roster/AddResident";
 import { RosterExportButtons, RosterExportMenu } from "@/components/roster/RosterExport";
 import { RemoveDialog } from "@/components/roster/RemoveDialog";
+import { RemoveResidentIcon } from "@/components/roster/RemoveResidentIcon";
 import { useRosterActions } from "@/components/roster/useRosterActions";
 import { useTenants } from "@/lib/queries";
 import { SitePicker, selectionLabel, useSiteSelection } from "@/lib/site";
@@ -35,6 +36,14 @@ const BATCH = 120;
 /** How many of the first rows get the staggered entrance. More would just delay the last of them. */
 const STAGGERED = 24;
 const STAGGER_MS = 16;
+const REVEAL_WIDTH = 88;
+const FULL_SWIPE = 164;
+const REMOVE_ICON_FADE_DISTANCE = 44;
+const openSwipeRowClosers = new Map<string, () => void>();
+
+function closeOpenSwipeRows(exceptId?: string) {
+  for (const [id, close] of openSwipeRowClosers) if (id !== exceptId) close();
+}
 
 function useProgressiveCount(total: number, resetKey: string) {
   const [state, setState] = useState({ key: resetKey, count: 1 });
@@ -471,16 +480,82 @@ const RosterRow = memo(function RosterRow({
   onRemove: (t: Tenant) => void;
   onRestore: (t: Tenant) => void;
 }) {
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const gesture = useRef<{ x: number; y: number; base: number; id: number; axis: "x" | "y" | null } | null>(null);
+  const offsetRef = useRef(0);
+  const suppressClick = useRef(false);
+  const swipable = tab !== "archived" && canArchive;
+
+  function setSlide(value: number) {
+    offsetRef.current = value;
+    setOffset(value);
+  }
+  useEffect(() => {
+    const close = () => setSlide(0);
+    openSwipeRowClosers.set(t.id, close);
+    return () => { if (openSwipeRowClosers.get(t.id) === close) openSwipeRowClosers.delete(t.id); };
+  }, [t.id]);
+  function pointerDown(event: React.PointerEvent<HTMLLIElement>) {
+    if (!swipable || window.matchMedia("(min-width: 1024px)").matches) return;
+    // Close any other revealed action as soon as the next row is pressed,
+    // without waiting to decide whether the gesture becomes a swipe.
+    closeOpenSwipeRows(t.id);
+    if ((event.target as HTMLElement).closest("button")) return;
+    gesture.current = { x: event.clientX, y: event.clientY, base: offsetRef.current, id: event.pointerId, axis: null };
+  }
+  function pointerMove(event: React.PointerEvent<HTMLLIElement>) {
+    const g = gesture.current;
+    if (!g || event.pointerId !== g.id) return;
+    const dx = event.clientX - g.x;
+    const dy = event.clientY - g.y;
+    if (!g.axis) {
+      if (Math.hypot(dx, dy) < 10) return;
+      g.axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? "x" : "y";
+      if (g.axis === "x") {
+        setDragging(true);
+        try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Browser may decline capture. */ }
+      }
+    }
+    if (g.axis !== "x") return;
+    suppressClick.current = true;
+    setSlide(Math.max(-220, Math.min(0, g.base + dx)));
+  }
+  function pointerEnd(event: React.PointerEvent<HTMLLIElement>, cancelled = false) {
+    const g = gesture.current;
+    if (!g || event.pointerId !== g.id) return;
+    gesture.current = null;
+    setDragging(false);
+    if (g.axis !== "x") return;
+    const distance = offsetRef.current;
+    const fullySwiped = !cancelled && distance <= -FULL_SWIPE;
+    const reveal = !cancelled && !fullySwiped && distance <= -REVEAL_WIDTH / 2;
+    if (reveal || fullySwiped) closeOpenSwipeRows(t.id);
+    setSlide(cancelled ? g.base : fullySwiped ? 0 : reveal ? -REVEAL_WIDTH : 0);
+    if (fullySwiped) onRemove(t);
+    // A pointer gesture can synthesize a click on the resident link afterward.
+    window.setTimeout(() => { suppressClick.current = false; }, 0);
+  }
+
   return (
     <li
-      className={cn("roster-row border-b border-hairline last:border-0", enterDelay !== null && "page-list-item-enter")}
+      className={cn("roster-row relative overflow-hidden border-b border-hairline last:border-0", swipable && "select-none lg:select-text", enterDelay !== null && "page-list-item-enter")}
       style={enterDelay !== null ? { animationDelay: `${enterDelay}ms` } : undefined}
+      onPointerDown={pointerDown}
+      onPointerMove={pointerMove}
+      onPointerUp={(event) => pointerEnd(event)}
+      onPointerCancel={(event) => pointerEnd(event, true)}
+      onDragStart={(event) => event.preventDefault()}
+      onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}
     >
-      <div className="group flex items-center gap-3 px-4 py-2.5 hover:bg-rowhover lg:grid lg:grid-cols-[88px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_120px_32px] lg:py-2">
+      {swipable && <button type="button" onClick={() => { closeOpenSwipeRows(); setSlide(0); onRemove(t); }} aria-label={`Remove ${t.displayName} from roster`} aria-hidden={offset > -REVEAL_WIDTH / 2} tabIndex={offset > -REVEAL_WIDTH / 2 ? -1 : 0} className={cn("absolute inset-y-0 right-0 flex w-[88px] items-center justify-center bg-status-redBg text-[12px] font-bold text-status-redText lg:hidden", offset > -REVEAL_WIDTH / 2 && "pointer-events-none")}>
+        Remove
+      </button>}
+      <div className="group relative flex items-center gap-3 bg-surface px-4 py-2.5 hover:bg-rowhover lg:grid lg:grid-cols-[88px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_120px_32px] lg:py-2" style={{ transform: `translateX(${offset}px)`, transition: dragging ? "none" : "transform 180ms ease-out", touchAction: swipable ? "pan-y" : undefined }}>
         <span className="w-[52px] shrink-0 text-center font-heading text-[14px] font-extrabold tabular text-ink lg:w-auto lg:text-left lg:text-[13.5px]">
           {t.unit ?? "—"}
         </span>
-        <Link to={`/tenants/${t.id}`} className="flex min-w-0 flex-1 items-center gap-2.5 lg:flex-none">
+        <Link to={`/tenants/${t.id}`} draggable={false} className="flex min-w-0 flex-1 items-center gap-2.5 lg:flex-none">
           <Avatar name={t.displayName} color={tintFor(t.id)} size={30} className="hidden lg:inline-flex" />
           <span className="min-w-0">
             <span className="flex items-center gap-1.5">
@@ -517,11 +592,12 @@ const RosterRow = memo(function RosterRow({
             )
           ) : canArchive ? (
             <button
-              onClick={() => onRemove(t)}
+              onClick={() => { closeOpenSwipeRows(); onRemove(t); }}
               title="Remove from roster"
-              className="flex h-10 w-10 items-center justify-center rounded-input text-muted hover:bg-status-redBg hover:text-status-redText lg:h-8 lg:w-8 lg:opacity-0 lg:group-hover:opacity-100"
+              className="flex h-10 w-10 items-center justify-center rounded-input text-muted opacity-[var(--swipe-opacity)] transition-opacity hover:bg-status-redBg hover:text-status-redText lg:h-8 lg:w-8 lg:opacity-0 lg:group-hover:opacity-100"
+              style={{ "--swipe-opacity": Math.max(0, 1 - Math.abs(offset) / REMOVE_ICON_FADE_DISTANCE) } as React.CSSProperties}
             >
-              <UserMinus className="h-4 w-4" />
+              <RemoveResidentIcon className="h-5 w-5" />
             </button>
           ) : (
             <ChevronRight className="h-4 w-4 text-muted" />
