@@ -1,0 +1,249 @@
+// Lantern Roster — data model.
+//
+// Local prototype runs on SQLite so it boots with no database server. The
+// schema is deliberately written in the subset Prisma supports on BOTH SQLite
+// and SQL Server (Azure SQL): no enums, no scalar lists, no Json columns —
+// statuses are strings and structured blobs are JSON text. Moving to Azure SQL
+// is a provider + DATABASE_URL change; see README "Moving to Azure SQL".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Sites ─────────────────────────
+
+/// A Lantern property / shelter site. Every roster entry belongs to one.
+model Site {
+  id         String  @id @default(cuid())
+  /// Stable, URL-safe code used by the public API and WordPress
+  /// (e.g. "amber-hall"). Never changes once integrations depend on it.
+  code       String  @unique
+  /// Display name staff see ("Amber Hall").
+  name       String
+  /// Legal/ownership entity as it appears in property-management exports
+  /// ("Amber Hall LP"). The CSV importer matches on this.
+  /// Unique in practice (enforced in code) — not a DB unique index, because
+  /// SQL Server permits only one NULL in a unique index.
+  entityName String?
+  /// "shelter" sites turn over fast; "supportive" housing is stable. Drives
+  /// nothing yet beyond display, but the attention threshold is likely to
+  /// differ by type, so it is recorded now.
+  siteType   String  @default("supportive")
+  address    String?
+  active     Boolean @default(true)
+  /// Per-site override of the attention threshold, in hours. Null = org default.
+  attentionHours Int?
+
+  tenants   Tenant[]
+  userSites UserSite[]
+  apiKeys   ApiKey[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entityName])
+}
+
+// ───────────────────────── Roster ─────────────────────────
+
+/// One person on a site's roster. The id is the permanent roster ID: forms,
+/// WordPress and the activity log all reference it, never the name — so a
+/// spelling fix or a preferred-name change can't create a false "inactive".
+model Tenant {
+  id            String    @id @default(cuid())
+  site          Site      @relation(fields: [siteId], references: [id])
+  siteId        String
+  unit          String?
+  firstName     String
+  lastName      String    @default("")
+  /// What staff call them ("Inez"). Shown first when present.
+  preferredName String?
+  /// "active" | "archived". Removing someone archives them; nothing in the
+  /// app hard-deletes a roster entry.
+  status        String    @default("active")
+  moveInDate    DateTime?
+  moveOutDate   DateTime?
+  notes         String?
+  /// Identifier in an upstream system (Yardi, property-management export…).
+  externalId    String?
+
+  // ── Activity / attention ────────────────────────────────
+  /// Last time any designated form or integration referenced this person.
+  lastActivityAt     DateTime?
+  lastActivitySource String?
+  /// Last time a staff member swiped "keep" in the review queue.
+  lastKeptAt         DateTime?
+  lastKeptById       String?
+  /// max(createdAt, lastActivityAt, lastKeptAt) — denormalised so the
+  /// attention queue is one indexed range scan instead of a computed filter.
+  /// Maintained by services/roster.ts; never write it directly.
+  attentionClockAt   DateTime  @default(now())
+
+  // ── Archive ────────────────────────────────────────────
+  archivedAt    DateTime?
+  archivedById  String?
+  archiveReason String?
+
+  /// Optimistic concurrency: every write must present the version it read.
+  version     Int      @default(1)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  activities TenantActivity[]
+  audit      AuditEvent[]
+
+  @@index([siteId, status, attentionClockAt])
+  @@index([siteId, status, unit])
+  @@index([updatedAt])
+  @@index([lastName, firstName])
+}
+
+/// A signal that a tenant is still around: a form submission that named them,
+/// an integration ping, or a manual "seen today". Append-only.
+model TenantActivity {
+  id          String   @id @default(cuid())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String
+  /// Machine source: "gravity_forms" | "roster" | "api" | "import".
+  source      String
+  /// Human label: "Incident Report (form 12)".
+  label       String?
+  /// Source-side id (e.g. GF entry id). With `source`, makes a retried
+  /// webhook idempotent — checked in code, not by a unique constraint,
+  /// because SQL Server allows only one NULL in a unique index.
+  externalRef String?
+  occurredAt  DateTime
+  /// Who/what recorded it — a person's name or an API key's name.
+  recordedBy  String?
+  createdAt   DateTime @default(now())
+
+  @@index([source, externalRef])
+  @@index([tenantId, occurredAt])
+}
+
+/// Immutable record of who changed a roster and why.
+model AuditEvent {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actorName String
+  /// tenant.created | tenant.updated | tenant.archived | tenant.restored |
+  /// tenant.kept | site.* | user.* | import.completed | apikey.* | webhook.*
+  action    String
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  tenantId  String?
+  siteId    String?
+  summary   String
+  /// JSON text: { field: [before, after] } or free-form metadata.
+  changes   String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([siteId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+// ───────────────────────── People ─────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  /// Entra object id — stable identity behind the mailbox, recorded on first
+  /// sign-in. Google Workspace users signing in as Entra B2B guests get one
+  /// too, so the same matching works for both. Indexed, not unique: invited
+  /// users have none yet, and SQL Server allows only one NULL per unique index.
+  entraObjectId String?
+  /// "microsoft" | "google.com" | other federated idp claim. Informational.
+  identityProvider String?
+  /// viewer | staff | site_manager | admin — see services/permissions.ts.
+  roleKey       String    @default("viewer")
+  /// active | invited | requested | denied | deactivated
+  status        String    @default("active")
+  title         String?
+  avatarColor   String?
+  defaultLandingPage String @default("/review")
+  /// Site code the roster opens on. Null = first site they can see.
+  defaultSiteCode    String?
+  lastSignInAt  DateTime?
+
+  /// Sites this person may act on. Empty = all sites (admins always all).
+  sites UserSite[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entraObjectId])
+}
+
+model UserSite {
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId String
+
+  @@id([userId, siteId])
+}
+
+// ───────────────────────── Integrations ─────────────────────────
+
+/// Machine credential for WordPress / Power Automate. Only a hash is stored.
+model ApiKey {
+  id         String    @id @default(cuid())
+  name       String
+  /// First characters of the key, shown so people can tell keys apart.
+  prefix     String
+  hash       String    @unique
+  /// Comma-separated: "roster:read,activity:write".
+  scopes     String
+  /// Optional restriction to one site.
+  site       Site?     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId     String?
+  lastUsedAt DateTime?
+  createdById String?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+/// Outbound webhook: roster changes are POSTed here, HMAC-signed.
+model Webhook {
+  id        String   @id @default(cuid())
+  name      String
+  url       String
+  secret    String
+  /// Comma-separated event names, or "*" for everything.
+  events    String   @default("*")
+  active    Boolean  @default(true)
+  lastDeliveryAt DateTime?
+  lastStatus     Int?
+  lastError      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+}
+
+model WebhookDelivery {
+  id         String   @id @default(cuid())
+  webhook    Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  webhookId  String
+  event      String
+  statusCode Int?
+  error      String?
+  durationMs Int?
+  createdAt  DateTime @default(now())
+
+  @@index([webhookId, createdAt])
+}
+
+/// Org-wide key/value settings (attention threshold, guest domains…).
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
