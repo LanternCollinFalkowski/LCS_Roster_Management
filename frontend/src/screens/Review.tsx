@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
+import { LEAN_MS, OUT_MS, DECK_CLASS, RoundAction, SwipeCard, prefersReducedMotion, type ExitDir, type Pose } from "@/components/ui/swipe-card";
 import { RemoveDialog } from "@/components/roster/RemoveDialog";
 import { useRosterActions } from "@/components/roster/useRosterActions";
 import { useQueryClient } from "@tanstack/react-query";
@@ -16,32 +17,6 @@ import { SitePicker, useSiteSelection } from "@/lib/site";
 import { useAuth } from "@/lib/auth";
 import { cn, formatDate, quietFor, relativeTime, tintFor } from "@/lib/utils";
 import type { Tenant } from "@/lib/types";
-
-/** How far a card must travel before letting go commits the swipe. */
-const THRESHOLD = 110;
-/** Down is a shorter reach for a thumb than across. */
-const SKIP_THRESHOLD = 90;
-
-type ExitDir = "left" | "right" | "down";
-
-/**
- * Where the parent is holding the top card.
- *  lean — pulled toward an action, its stamp showing, as if mid-swipe. A button
- *         press plays this first so it looks like a swipe; a removal waits here
- *         while its confirmation is open.
- *  out  — flying off the screen.
- */
-interface Pose {
-  id: string;
-  dir: ExitDir;
-  stage: "lean" | "out";
-}
-/** How long a button-triggered lean shows before the card flies. */
-const LEAN_MS = 190;
-/** Fly-out duration; the card is dropped from the queue when it ends. */
-const OUT_MS = 300;
-const prefersReducedMotion = () =>
-  typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 /** One decision made in this session, newest last — what Undo walks back through. */
 interface Decision {
@@ -267,8 +242,9 @@ export function ReviewPage() {
 
   const subtitle = `Not on any form or confirmed in ${hours}+ hours`;
 
+  // overflow-clip: a card flying off the deck must not grow the page's scroll area.
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex min-h-full flex-col overflow-clip">
       <PhoneHeader title="Review" subtitle={subtitle}>
         <SitePicker codes={codes} onChange={setCodes} className="mt-3" />
       </PhoneHeader>
@@ -304,7 +280,7 @@ export function ReviewPage() {
         ) : (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_1fr] lg:items-start">
             <div>
-              <div className="mb-3 flex min-h-[40px] items-center justify-between gap-3 text-[13px] text-muted">
+              <div className="flex min-h-[40px] items-center justify-between gap-3 text-[13px] text-muted">
                 <p className="min-w-0">
                   <strong className="tabular text-ink">{queue.length}</strong> to review
                   {done > 0 && <> · {done} done</>}
@@ -313,11 +289,15 @@ export function ReviewPage() {
                 <UndoButton last={last} busy={undoing || Boolean(pose)} onUndo={() => void undo()} />
               </div>
 
-              <div className="relative mx-auto h-[392px] w-full max-w-[420px] select-none">
+              {/* The mask: a card is clipped once it leaves this band (vertically —
+                  the page root clips it sideways) rather than sliding over the
+                  counts above or the tab bar below. */}
+              <div className="overflow-y-clip pt-3">
+              <div className={DECK_CLASS}>
                 {queue.slice(0, 3).reverse().map((t) => {
                   const depth = queue.indexOf(t);
                   return (
-                    <SwipeCard
+                    <ReviewCard
                       key={t.id}
                       tenant={t}
                       depth={depth}
@@ -351,6 +331,7 @@ export function ReviewPage() {
               <p className="mt-3 text-center text-micro text-muted">
                 Swipe left to remove · down to skip · right if they're still here
               </p>
+              </div>
             </div>
 
             {/* Wide screens: the rest of the queue, actionable in place. From 1024px up —
@@ -412,41 +393,7 @@ function UndoButton({ last, busy, onUndo }: { last?: Decision; busy: boolean; on
   );
 }
 
-function RoundAction({
-  label, tone, size = "md", disabled, onClick, children,
-}: {
-  label: string;
-  tone: "red" | "green" | "blue";
-  size?: "sm" | "md";
-  disabled?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      className="flex flex-col items-center gap-1.5 disabled:opacity-40"
-    >
-      <span
-        className={cn(
-          "flex items-center justify-center rounded-full border-2 bg-surface shadow-card transition-transform active:scale-95",
-          size === "sm" ? "h-[52px] w-[52px]" : "h-16 w-16",
-          tone === "red" && "border-status-redDot text-status-redText",
-          tone === "green" && "border-status-greenDot text-status-greenText",
-          tone === "blue" && "border-status-blueDot text-status-blueText"
-        )}
-      >
-        {children}
-      </span>
-      <span className="text-[12px] font-bold text-muted">{label}</span>
-    </button>
-  );
-}
-
-function SwipeCard({
+function ReviewCard({
   tenant: t, depth, hours, showSite, pose, canKeep, canRemove, onSwipeLeft, onSwipeRight, onSwipeDown,
 }: {
   tenant: Tenant;
@@ -460,84 +407,6 @@ function SwipeCard({
   onSwipeRight: () => void;
   onSwipeDown: () => void;
 }) {
-  const [dx, setDx] = useState(0);
-  const [dy, setDy] = useState(0);
-  const [dragging, setDragging] = useState(false);
-  const start = useRef<{ x: number; y: number; id: number } | null>(null);
-  /** Decided by the first ~10px of movement, so a sideways swipe never drifts into a skip. */
-  const axis = useRef<"x" | "y" | null>(null);
-  const isTop = depth === 0;
-
-  function down(e: React.PointerEvent) {
-    if (!isTop || pose) return;
-    if ((e.target as HTMLElement).closest("a,button")) return;
-    start.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
-    axis.current = null;
-    try {
-      // Keeps the drag if the finger slides off the card. Best-effort: a
-      // browser that refuses capture still gets a working swipe.
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-    setDragging(true);
-  }
-  function move(e: React.PointerEvent) {
-    if (!dragging || !start.current) return;
-    const rawX = e.clientX - start.current.x;
-    const rawY = e.clientY - start.current.y;
-    if (!axis.current) {
-      if (Math.hypot(rawX, rawY) < 10) return;
-      axis.current = Math.abs(rawY) > Math.abs(rawX) ? "y" : "x";
-    }
-    if (axis.current === "x") {
-      let next = rawX;
-      // Resist in a direction the person isn't allowed to commit.
-      if (next > 0 && !canKeep) next = next / 4;
-      if (next < 0 && !canRemove) next = next / 4;
-      setDx(next);
-    } else {
-      // Down skips; up has no meaning, so it only gives a little.
-      setDy(rawY > 0 ? rawY : rawY / 5);
-    }
-  }
-  function up() {
-    if (!dragging) return;
-    setDragging(false);
-    start.current = null;
-    axis.current = null;
-    if (dx > THRESHOLD && canKeep) onSwipeRight();
-    else if (dx < -THRESHOLD && canRemove) onSwipeLeft();
-    else if (dy > SKIP_THRESHOLD) onSwipeDown();
-    setDx(0);
-    setDy(0);
-  }
-
-  // A pose from the parent wins over the finger. Lean positions sit just past
-  // each threshold, so the stamp is fully showing — the same frame a real
-  // swipe reaches the moment it would commit.
-  const LEAN = { x: THRESHOLD + 30, y: SKIP_THRESHOLD + 20 };
-  const posed = (dir: ExitDir) =>
-    pose?.dir === dir ? (pose.stage === "out" ? (dir === "down" ? 520 : 640) : dir === "down" ? LEAN.y : LEAN.x) : 0;
-  const offset = pose ? posed("right") - posed("left") : dx;
-  const drop = pose ? posed("down") : dy;
-  const rotate = offset / 18;
-  const scale = isTop ? 1 : 1 - depth * 0.04;
-  const lift = isTop ? 0 : depth * 12;
-  const keepOpacity = Math.min(1, Math.max(0, offset / THRESHOLD));
-  const removeOpacity = Math.min(1, Math.max(0, -offset / THRESHOLD));
-  const skipOpacity = Math.min(1, Math.max(0, drop / SKIP_THRESHOLD));
-  const leaving = pose?.stage === "out";
-  // The lean is a quick, decisive pull; the fly-out accelerates away; with no
-  // pose the card settles back like a spring.
-  const transition = dragging
-    ? "none"
-    : pose?.stage === "lean"
-      ? `transform ${LEAN_MS}ms cubic-bezier(.2,.9,.3,1)`
-      : leaving
-        ? `transform ${OUT_MS}ms cubic-bezier(.4,0,.9,.6), opacity ${OUT_MS}ms ease-in`
-        : "transform 320ms cubic-bezier(.2,1.2,.4,1)";
-
   const lastSeen = t.lastActivityAt
     ? { label: `Last on a form ${relativeTime(t.lastActivityAt)}`, detail: t.lastActivitySource }
     : t.lastKeptAt
@@ -545,84 +414,46 @@ function SwipeCard({
       : { label: "No form activity on record", detail: `on roster since ${formatDate(t.createdAt)}` };
 
   return (
-    <div
-      onPointerDown={down}
-      onPointerMove={move}
-      onPointerUp={up}
-      onPointerCancel={up}
-      className={cn(
-        "absolute inset-0 rounded-[16px] border border-hairline bg-surface shadow-panel",
-        isTop ? "cursor-grab active:cursor-grabbing" : "pointer-events-none",
-      )}
-      style={{
-        transform: `translate3d(${offset}px, ${lift + drop}px, 0) rotate(${rotate}deg) scale(${scale})`,
-        // The card owns every direction now that down means skip; the page
-        // still scrolls from anywhere outside it.
-        touchAction: isTop ? "none" : "auto",
-        opacity: leaving ? 0 : 1,
-        transition,
-        zIndex: 10 - depth,
-      }}
-      aria-hidden={!isTop}
+    <SwipeCard
+      depth={depth}
+      pose={pose}
+      rightLabel="KEEP"
+      leftLabel="REMOVE"
+      canRight={canKeep}
+      canLeft={canRemove}
+      onSwipeLeft={onSwipeLeft}
+      onSwipeRight={onSwipeRight}
+      onSwipeDown={onSwipeDown}
     >
-      {/* Stamps that fade in as the card travels. */}
-      <span
-        className="pointer-events-none absolute left-5 top-5 rotate-[-12deg] rounded-input border-[3px] border-status-greenDot px-2.5 py-1 font-heading text-[20px] font-extrabold tracking-wide text-status-greenText"
-        style={{ opacity: keepOpacity }}
-      >
-        KEEP
-      </span>
-      <span
-        className="pointer-events-none absolute right-5 top-5 rotate-[12deg] rounded-input border-[3px] border-status-redDot px-2.5 py-1 font-heading text-[20px] font-extrabold tracking-wide text-status-redText"
-        style={{ opacity: removeOpacity }}
-      >
-        REMOVE
-      </span>
-      {/* Same stamp language as KEEP / REMOVE — outline, no fill, a slight tilt —
-          in blue, top-centre and above the avatar so the two never collide. */}
-      <span
-        className="pointer-events-none absolute left-1/2 top-2.5 z-[1] flex -translate-x-1/2 rotate-[-4deg] items-center gap-1 rounded-input border-[3px] border-status-blueDot py-0 pl-1.5 pr-2.5 font-heading text-[18px] font-extrabold tracking-wide text-status-blueText"
-        style={{ opacity: skipOpacity }}
-      >
-        <ChevronsDown className="h-[18px] w-[18px]" strokeWidth={3} /> SKIP
-      </span>
-
-      <div
-        className="flex h-full flex-col items-center px-6 pb-5 pt-10 text-center"
-        // Pulled down, the contents dim and settle 16px lower, so the stamp
-        // gets clear space above the avatar instead of sitting on it.
-        style={{ opacity: 1 - skipOpacity * 0.4, transform: `translateY(${skipOpacity * 16}px)` }}
-      >
-        <Avatar name={t.displayName} color={tintFor(t.id)} size={84} />
-        <h2 className="mt-4 text-[24px] font-heading font-extrabold leading-tight text-ink">{t.displayName}</h2>
-        {t.preferredName && (
-          <p className="mt-0.5 text-[13px] text-muted">
-            {t.firstName} {t.lastName}
-          </p>
-        )}
-        <p className="mt-2 text-[15px] font-semibold text-ink">
-          {[t.unit ? `Unit ${t.unit}` : "No unit", showSite && t.site?.name].filter(Boolean).join(" · ")}
+      <Avatar name={t.displayName} color={tintFor(t.id)} size={84} className="swipe-avatar" />
+      <h2 className="swipe-name mt-4 text-[24px] font-heading font-extrabold leading-tight text-ink">{t.displayName}</h2>
+      {t.preferredName && (
+        <p className="mt-0.5 text-[13px] text-muted">
+          {t.firstName} {t.lastName}
         </p>
+      )}
+      <p className="mt-2 text-[15px] font-semibold text-ink">
+        {[t.unit ? `Unit ${t.unit}` : "No unit", showSite && t.site?.name].filter(Boolean).join(" · ")}
+      </p>
 
-        <div className="mt-5 w-full rounded-card bg-status-amberBg px-4 py-3 text-left">
-          <p className="flex items-center gap-2 text-[14px] font-bold text-status-amberText">
-            <Clock3 className="h-4 w-4" /> Quiet for {quietFor(t.hoursQuiet)}
-          </p>
-          <p className="mt-1 text-[12.5px] text-status-amberText/90">
-            {lastSeen.label}
-            {lastSeen.detail ? ` · ${lastSeen.detail}` : ""}
-          </p>
-        </div>
-
-        <span className="flex-1" />
-        <Link
-          to={`/tenants/${t.id}`}
-          className="inline-flex min-h-[40px] items-center gap-1 text-[13px] font-semibold text-accent dark:text-white"
-        >
-          Open profile <ChevronRight className="h-4 w-4" />
-        </Link>
-        <p className="text-micro text-muted">Threshold {hours}h{t.moveInDate ? ` · moved in ${formatDate(t.moveInDate)}` : ""}</p>
+      <div className="swipe-note mt-5 w-full rounded-card bg-status-amberBg px-4 py-3 text-left">
+        <p className="flex items-center gap-2 text-[14px] font-bold text-status-amberText">
+          <Clock3 className="h-4 w-4" /> Quiet for {quietFor(t.hoursQuiet)}
+        </p>
+        <p className="mt-1 text-[12.5px] text-status-amberText/90">
+          {lastSeen.label}
+          {lastSeen.detail ? ` · ${lastSeen.detail}` : ""}
+        </p>
       </div>
-    </div>
+
+      <span className="flex-1" />
+      <Link
+        to={`/tenants/${t.id}`}
+        className="inline-flex min-h-[40px] items-center gap-1 text-[13px] font-semibold text-accent dark:text-white"
+      >
+        Open profile <ChevronRight className="h-4 w-4" />
+      </Link>
+      <p className="text-micro text-muted">Threshold {hours}h{t.moveInDate ? ` · moved in ${formatDate(t.moveInDate)}` : ""}</p>
+    </SwipeCard>
   );
 }

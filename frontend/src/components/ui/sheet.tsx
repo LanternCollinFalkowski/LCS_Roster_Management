@@ -7,8 +7,9 @@ import { cn } from "@/lib/utils";
  *
  * Same Radix dialog underneath as `<Dialog>`, so focus trapping, Escape and the
  * scroll lock behave identically; only the geometry differs. It rises from the
- * bottom edge, caps at 88% of the viewport, and reserves the home-indicator
- * strip in its footer, so the primary action is never under the gesture bar.
+ * bottom edge, caps at 88% of the viewport, and reserves the site-wide bottom
+ * inset (`pb-safe-bottom`, the same strip the tab bar leaves) under whatever it
+ * ends with — footer or body — so nothing is ever under the gesture bar.
  */
 export const Sheet = DialogPrimitive.Root;
 export const SheetTrigger = DialogPrimitive.Trigger;
@@ -23,7 +24,7 @@ export const SheetContent = forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "sheet-panel fixed inset-x-0 bottom-0 z-50 flex max-h-[88vh] flex-col",
+        "sheet-panel fixed inset-x-0 bottom-0 z-50 flex max-h-[88vh] flex-col pb-safe-bottom",
         "rounded-t-[16px] bg-surface shadow-modal focus:outline-none",
         className
       )}
@@ -55,13 +56,12 @@ export function SheetBody({ children, className }: { children: React.ReactNode; 
 }
 
 /**
- * Sticky footer. `pb-safe-bottom` adds the home-indicator inset on top of its
- * own padding, so the buttons clear the gesture bar on a notched phone and stay
- * at 12px on a device without one.
+ * Sticky footer. No bottom padding of its own: the sheet already reserves the
+ * site-wide bottom inset beneath it.
  */
 export function SheetFooter({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-none items-center gap-2.5 border-t border-hairline px-4 pb-safe-bottom pt-3", className)}>
+    <div className={cn("flex flex-none items-center gap-2.5 border-t border-hairline px-4 pt-3", className)}>
       {children}
     </div>
   );

@@ -4,16 +4,22 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useFileExport, type ExportFormat } from "@/lib/exportPipeline";
 import { API_BASE } from "@/lib/api";
 
-/** What's on screen: the site selection and the search box. */
+/** What's on screen: the site selection and the search box, or a specific multi-select. */
 export interface AttendanceView {
   site?: string;
   q: string;
+  /** A multi-selected set of entries — exported instead of the filtered view when present. */
+  ids?: string[];
 }
 
 function exportUrl(view: AttendanceView, format: ExportFormat, inline = false) {
   const p = new URLSearchParams({ format });
-  if (view.site) p.set("site", view.site);
-  if (view.q.trim()) p.set("q", view.q.trim());
+  if (view.ids && view.ids.length > 0) {
+    p.set("ids", view.ids.join(","));
+  } else {
+    if (view.site) p.set("site", view.site);
+    if (view.q.trim()) p.set("q", view.q.trim());
+  }
   if (inline) p.set("inline", "1");
   return `${API_BASE}/attendance/export?${p}`;
 }
@@ -44,6 +50,7 @@ function ExportItems({ download, busy }: { download: (f: ExportFormat) => void; 
 /** Desktop: a Print button and an Export menu, side by side. */
 export function AttendanceExportButtons({ view, disabled }: { view: AttendanceView; disabled?: boolean }) {
   const { download, print, busy } = useAttendanceExport(view);
+  const label = view.ids && view.ids.length > 0 ? `Export ${view.ids.length} selected` : "Export what's shown";
   return (
     <>
       <Button variant="secondary" onClick={() => void print()} disabled={disabled || busy !== null} title="Print attendance">
@@ -56,7 +63,7 @@ export function AttendanceExportButtons({ view, disabled }: { view: AttendanceVi
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-[240px]">
-          <DropdownMenuLabel>Export what's shown</DropdownMenuLabel>
+          <DropdownMenuLabel>{label}</DropdownMenuLabel>
           <ExportItems download={download} busy={busy} />
         </DropdownMenuContent>
       </DropdownMenu>
@@ -67,6 +74,7 @@ export function AttendanceExportButtons({ view, disabled }: { view: AttendanceVi
 /** Phone: one "…" button beside Take attendance, holding Print and the three formats. */
 export function AttendanceExportMenu({ view, disabled }: { view: AttendanceView; disabled?: boolean }) {
   const { download, print, busy } = useAttendanceExport(view);
+  const label = view.ids && view.ids.length > 0 ? `Export ${view.ids.length} selected` : "Export what's shown";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -79,7 +87,7 @@ export function AttendanceExportMenu({ view, disabled }: { view: AttendanceView;
           <Printer className="h-4 w-4 text-muted" /> Print
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel>Export what's shown</DropdownMenuLabel>
+        <DropdownMenuLabel>{label}</DropdownMenuLabel>
         <ExportItems download={download} busy={busy} />
       </DropdownMenuContent>
     </DropdownMenu>

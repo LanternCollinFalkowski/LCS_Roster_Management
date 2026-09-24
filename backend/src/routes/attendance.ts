@@ -4,7 +4,7 @@ import { prisma } from "../prisma.js";
 import { asyncHandler, badRequest } from "../http.js";
 import { requireAuth, requirePermission } from "../auth/middleware.js";
 import { resolveSite } from "../services/siteScope.js";
-import { loadAttendance, loadAttendanceDetail, serializeEntry } from "../services/attendance.js";
+import { loadAttendance, loadAttendanceByIds, loadAttendanceDetail, serializeEntry } from "../services/attendance.js";
 import { displayName } from "../services/roster.js";
 import { detailCsv, detailFilename, detailPdf, detailXlsx, exportFilename, scopeLabel, toCsv, toPdf, toXlsx, type ExportContext } from "../services/attendanceExport.js";
 import { actorOf, audit } from "../services/audit.js";
@@ -37,20 +37,32 @@ attendanceRouter.get(
   asyncHandler(async (req, res) => {
     const format = String(req.query.format ?? "csv") as keyof typeof EXPORT_TYPES;
     if (!(format in EXPORT_TYPES)) throw badRequest("format must be csv, xlsx or pdf.");
-    // Walk the same selection as the list, including entries beyond its first page.
-    const items: Awaited<ReturnType<typeof loadAttendance>>["items"] = [];
-    let before: string | null = null;
-    let sites: Awaited<ReturnType<typeof loadAttendance>>["sites"] = [];
-    do {
-      const page = await loadAttendance(req, { site: req.query.site, q: req.query.q, before, limit: 100 });
-      sites = page.sites;
-      items.push(...page.items);
-      before = page.nextBefore;
-    } while (before);
+
+    // Exporting a multi-select on the Past attendance list: exactly those
+    // entries, not everything matching the current filter.
+    const idsParam = typeof req.query.ids === "string" ? req.query.ids.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    if (idsParam.length > 500) throw badRequest("Select 500 or fewer entries to export at once.");
+
+    let items: Awaited<ReturnType<typeof loadAttendance>>["items"];
+    let sites: Awaited<ReturnType<typeof loadAttendance>>["sites"];
+    if (idsParam.length) {
+      ({ items, sites } = await loadAttendanceByIds(req, idsParam));
+    } else {
+      // Walk the same selection as the list, including entries beyond its first page.
+      items = [];
+      sites = [];
+      let before: string | null = null;
+      do {
+        const page = await loadAttendance(req, { site: req.query.site, q: req.query.q, before, limit: 100 });
+        sites = page.sites;
+        items.push(...page.items);
+        before = page.nextBefore;
+      } while (before);
+    }
     const ctx: ExportContext = {
       sites,
-      isAll: typeof req.query.site !== "string" || req.query.site.trim() === "",
-      q: typeof req.query.q === "string" ? req.query.q.trim() : "",
+      isAll: idsParam.length === 0 && (typeof req.query.site !== "string" || req.query.site.trim() === ""),
+      q: idsParam.length ? "" : typeof req.query.q === "string" ? req.query.q.trim() : "",
       items,
       generatedBy: req.user!.name,
       generatedAt: new Date(),

@@ -42,11 +42,9 @@ export function MobileTabBar() {
   return (
     <nav
       aria-label="Main"
-      className="flex-none border-t border-hairline bg-surface px-2 pt-1.5 md:hidden"
-      // At least 14px under the icons, or the home-indicator inset plus a
-      // little when the phone reports one — so the tabs never sit on the
-      // swipe-home bar (see --tabbar-bottom in index.css).
-      style={{ paddingBottom: "var(--tabbar-bottom)" }}
+      // pb-safe-bottom: the site-wide bottom inset, so the tabs never sit on
+      // the swipe-home bar (see --tabbar-bottom in index.css).
+      className="flex-none border-t border-hairline bg-surface px-2 pb-safe-bottom pt-1.5 md:hidden"
     >
       <div
         className="grid gap-0.5"

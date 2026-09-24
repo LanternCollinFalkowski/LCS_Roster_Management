@@ -92,10 +92,15 @@ export default {
        * Phone chrome: the notch insets folded into ordinary padding, so
        * `pt-safe-top` reads as "the usual top padding, clear of the status
        * bar" and collapses to plain 12px on a device without one.
+       *
+       * `pb-safe-bottom` is the one bottom inset for every phone surface that
+       * meets the bottom edge — the tab bar, sheets, sticky footers — so none
+       * of them puts a control on the iOS swipe-home strip, and they all stop
+       * at the same height (see --tabbar-bottom in index.css).
        */
       spacing: {
         "safe-top": "calc(12px + var(--safe-top))",
-        "safe-bottom": "calc(12px + var(--safe-bottom))",
+        "safe-bottom": "var(--tabbar-bottom)",
       },
     },
   },

@@ -12,7 +12,6 @@ import { ReviewPage } from "./screens/Review";
 import { TenantDetailPage } from "./screens/TenantDetail";
 import { ActivityPage } from "./screens/Activity";
 import { AttendancePage } from "./screens/Attendance";
-import { TakeAttendancePage } from "./screens/TakeAttendance";
 import { AttendanceDetailPage } from "./screens/AttendanceDetail";
 import { ProfilePage } from "./screens/Profile";
 import { MorePage } from "./screens/More";
@@ -75,7 +74,6 @@ export function App() {
           <Route path="/tenants/:id" element={<TenantDetailPage />} />
           <Route path="/activity" element={<ActivityPage />} />
           <Route path="/attendance" element={<AttendancePage />} />
-          <Route path="/attendance/new" element={<TakeAttendancePage />} />
           <Route path="/attendance/:id" element={<AttendanceDetailPage />} />
         </Route>
 

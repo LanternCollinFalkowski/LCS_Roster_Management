@@ -660,3 +660,15 @@ h6 {
 @media (min-width: 1024px) {
   .roster-row { contain-intrinsic-size: auto 49px; }
 }
+
+/* Swipe decks (Review, roll call). The deck is a size container so a card
+   squeezed onto a short phone screen tightens itself — smaller avatar, less
+   air — instead of letting its contents run past the card's bottom edge. At
+   its full 392px nothing here applies. */
+.swipe-deck { container-type: size; }
+@container (max-height: 340px) {
+  .swipe-deck .swipe-card-body { padding-top: 2rem; padding-bottom: 0.75rem; }
+  .swipe-deck .swipe-avatar { zoom: 0.8; }
+  .swipe-deck .swipe-name { margin-top: 0.5rem; font-size: 21px; }
+  .swipe-deck .swipe-note { margin-top: 0.75rem; }
+}
